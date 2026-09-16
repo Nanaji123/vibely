@@ -1,0 +1,1186 @@
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  ScrollView,
+  Modal,
+  TextInput,
+  Platform,
+  RefreshControl,
+  Animated,
+} from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import * as ImagePicker from 'expo-image-picker';
+import * as Clipboard from 'expo-clipboard';
+import { Palette, ThemeColors } from '../theme/colors';
+import { ThemeShadows } from '../theme/shadows';
+import { ConversationModel, TargetProfileModel } from '../domain';
+import { AIService } from '../services/aiService';
+
+interface HomeScreenProps {
+  activeProfile?: TargetProfileModel;
+  recentConversations: ConversationModel[];
+  onStartNewSession: () => void;
+  onCreateCustomSession?: (rawText: string, mode: 'screenshot' | 'paste' | 'type') => void;
+  onOpenConversation: (conv: ConversationModel) => void;
+  onSwitchProfile: () => void;
+}
+
+export const HomeScreen: React.FC<HomeScreenProps> = ({
+  activeProfile,
+  recentConversations,
+  onStartNewSession,
+  onCreateCustomSession,
+  onOpenConversation,
+  onSwitchProfile,
+}) => {
+  const [showNewSessionModal, setShowNewSessionModal] = useState(false);
+  const [modalMode, setModalMode] = useState<'picker' | 'paste'>('picker');
+  const [pasteText, setPasteText] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Skeleton pulse animation
+  const skeletonAnim = useRef(new Animated.Value(0.4)).current;
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(skeletonAnim, {
+          toValue: 0.9,
+          duration: 700,
+          useNativeDriver: true,
+        }),
+        Animated.timing(skeletonAnim, {
+          toValue: 0.4,
+          duration: 700,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  }, [skeletonAnim]);
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    setTimeout(() => {
+      setRefreshing(false);
+    }, 850);
+  };
+
+  // Top/Current active conversation (always the first one in the list)
+  const currentConvo = recentConversations[0];
+  const targetName = activeProfile?.name || currentConvo?.targetName || 'Sarah';
+  const targetGender = activeProfile?.gender || 'female';
+  const genderLabel = targetGender === 'female' ? '👩 Her' : targetGender === 'male' ? '👨 Him' : '🧑 Them';
+
+  // 1. Upload Screenshot Handler
+  const handleUploadScreenshot = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets && result.assets[0]) {
+        const extracted = AIService.extractChatFromImage(result.assets[0].uri);
+        const lastMsg = extracted.messages[extracted.messages.length - 1]?.text || 'Probably just staying home lol';
+        if (onCreateCustomSession) {
+          onCreateCustomSession(lastMsg, 'screenshot');
+        }
+      } else {
+        if (onCreateCustomSession) {
+          onCreateCustomSession('Probably just staying home lol', 'screenshot');
+        }
+      }
+    } catch (e) {
+      if (onCreateCustomSession) {
+        onCreateCustomSession('Probably just staying home lol', 'screenshot');
+      }
+    }
+    setShowNewSessionModal(false);
+    setModalMode('picker');
+  };
+
+  // 2. Paste Submit Handler
+  const handlePasteSubmit = () => {
+    if (!pasteText.trim()) return;
+    if (onCreateCustomSession) {
+      onCreateCustomSession(pasteText.trim(), 'paste');
+    }
+    setPasteText('');
+    setShowNewSessionModal(false);
+    setModalMode('picker');
+  };
+
+  // 3. Quick Paste from Clipboard
+  const handlePasteFromClipboard = async () => {
+    try {
+      const text = await Clipboard.getStringAsync();
+      if (text) {
+        setPasteText(text);
+      }
+    } catch (e) {}
+  };
+
+  // 4. Type Directly in Chat Handler
+  const handleTypeInChat = () => {
+    setShowNewSessionModal(false);
+    setModalMode('picker');
+    onStartNewSession();
+  };
+
+  return (
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.scrollContent}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor={Palette.indigo600}
+          colors={[Palette.indigo600, Palette.zinc900]}
+        />
+      }
+    >
+      {/* 1. TOP HEADER & STATUS BAR */}
+      <View style={styles.topStatusHeader}>
+        <View>
+          <Text style={styles.appBrandTitle}>Vibely AI</Text>
+          <Text style={styles.appBrandSub}>AI Conversation Wingman</Text>
+        </View>
+
+        <View style={styles.onlineBadge}>
+          <View style={styles.onlineGreenDot} />
+          <Text style={styles.onlineBadgeText}>AI Engine Active</Text>
+        </View>
+      </View>
+
+      {/* SKELETON LOADER STATE (Rendered when pulling to refresh) */}
+      {refreshing ? (
+        <View style={{ gap: 14, marginBottom: 16 }}>
+          <Animated.View style={[styles.skeletonCard, { opacity: skeletonAnim }]}>
+            <View style={styles.skeletonLineTop} />
+            <View style={styles.skeletonLineMid} />
+            <View style={styles.skeletonLineShort} />
+          </Animated.View>
+          <Animated.View style={[styles.skeletonCardSmall, { opacity: skeletonAnim }]}>
+            <View style={styles.skeletonLineTop} />
+          </Animated.View>
+        </View>
+      ) : (
+        /* 2. CURRENT CONVO CARD ON TOP (The Chat Card on Top!) */
+        currentConvo ? (
+          <View style={styles.topChatCardSection}>
+            <View style={styles.sectionTitleRow}>
+              <View style={styles.sectionBadgeBox}>
+                <Feather name="message-circle" size={12} color={Palette.indigo600} />
+                <Text style={styles.sectionBadgeText}>CURRENT CONVERSATION</Text>
+              </View>
+              <View style={styles.pulsePill}>
+                <Feather name="activity" size={11} color={Palette.emerald600} />
+                <Text style={styles.pulsePillText}>{currentConvo.pulseScore || 84}% Pulse</Text>
+              </View>
+            </View>
+
+          {/* Interactive Chat Card */}
+          <TouchableOpacity
+            style={styles.chatCardOnTop}
+            onPress={() => onOpenConversation(currentConvo)}
+            activeOpacity={0.9}
+          >
+            {/* Target Header Inside Card */}
+            <View style={styles.cardHeaderRow}>
+              <View style={styles.cardAvatar}>
+                <Text style={styles.cardAvatarEmoji}>
+                  {activeProfile?.avatarEmoji || (currentConvo.targetName === 'Sarah' ? '💕' : '❤️')}
+                </Text>
+              </View>
+
+              <View style={styles.cardTargetDetails}>
+                <View style={styles.nameRow}>
+                  <Text style={styles.cardTargetName}>{currentConvo.targetName}</Text>
+                  <View style={styles.cardGenderChip}>
+                    <Text style={styles.cardGenderText}>{genderLabel}</Text>
+                  </View>
+                  <View style={styles.cardRelChip}>
+                    <Text style={styles.cardRelText}>{currentConvo.relationship.toUpperCase()}</Text>
+                  </View>
+                </View>
+                <Text style={styles.cardVibeSummary}>
+                  {currentConvo.title || `Chat with ${currentConvo.targetName}`}
+                </Text>
+              </View>
+
+              <View style={styles.openStudioIcon}>
+                <Feather name="chevron-right" size={20} color={Palette.zinc400} />
+              </View>
+            </View>
+
+            {/* Chat Preview Bubbles Inside Card */}
+            <View style={styles.cardPreviewContainer}>
+              {/* Target Message Preview */}
+              <View style={styles.previewBubbleThem}>
+                <Text style={styles.previewLabelThem}>
+                  {currentConvo.targetName} said:
+                </Text>
+                <Text style={styles.previewTextThem} numberOfLines={2}>
+                  "{currentConvo.messages.find(m => m.sender === 'you' && m.text.includes('said:'))?.text.replace(/^She said:|^He said:/i, '').replace(/["']/g, '').trim() ||
+                    currentConvo.messages[currentConvo.messages.length - 1]?.text ||
+                    'Probably just staying home lol'}"
+                </Text>
+              </View>
+
+              {/* AI Coaching Snippet */}
+              <View style={styles.previewBubbleAi}>
+                <View style={styles.aiSnippetRow}>
+                  <Feather name="zap" size={11} color={Palette.indigo600} />
+                  <Text style={styles.aiSnippetLabel}>AI WINGMAN SCENE ADVICE</Text>
+                </View>
+                <Text style={styles.aiSnippetText} numberOfLines={2}>
+                  {currentConvo.messages.find(m => m.sender === 'ai' && m.sceneContext)?.sceneContext ||
+                    "She's signaling low weekend plans and testing if you'll lead. Take initiative!"}
+                </Text>
+              </View>
+            </View>
+
+            {/* Card Footer CTA */}
+            <View style={styles.cardFooter}>
+              <Text style={styles.cardFooterHint}>3 tailored responses ready in studio</Text>
+              <View style={styles.cardCtaBtn}>
+                <Text style={styles.cardCtaBtnText}>Open Chat Studio</Text>
+                <Feather name="arrow-right" size={12} color="#ffffff" />
+              </View>
+            </View>
+          </TouchableOpacity>
+        </View>
+      ) : null)}
+
+      {/* 3. PRIMARY ACTION: START NEW SESSION */}
+      <View style={styles.newSessionActionSection}>
+        <TouchableOpacity
+          style={styles.startSessionPrimaryBtn}
+          onPress={() => {
+            setModalMode('picker');
+            setShowNewSessionModal(true);
+          }}
+          activeOpacity={0.88}
+        >
+          <LinearGradient
+            colors={['#18181b', '#27272a']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.startSessionGradient}
+          >
+            <View style={styles.startSessionLeft}>
+              <View style={styles.plusIconSquare}>
+                <Feather name="plus" size={20} color="#ffffff" />
+              </View>
+              <View>
+                <Text style={styles.startSessionTitle}>Start New Session</Text>
+                <Text style={styles.startSessionSubtitle}>
+                  Upload screenshot, paste dialogue, or type
+                </Text>
+              </View>
+            </View>
+
+            <Feather name="arrow-up-right" size={20} color="#ffffff" />
+          </LinearGradient>
+        </TouchableOpacity>
+      </View>
+
+      {/* 4. ACTIVE PERSONALITY PROFILE CONTEXT */}
+      <View style={styles.sectionContainer}>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionMainHeading}>Active Target Context</Text>
+          <TouchableOpacity onPress={onSwitchProfile} activeOpacity={0.7}>
+            <Text style={styles.switchProfileLink}>Switch Profile →</Text>
+          </TouchableOpacity>
+        </View>
+
+        <TouchableOpacity
+          style={styles.profileContextCard}
+          onPress={onSwitchProfile}
+          activeOpacity={0.85}
+        >
+          <View style={styles.profileAvatarLarge}>
+            <Text style={styles.profileAvatarText}>{activeProfile?.avatarEmoji || '❤️'}</Text>
+          </View>
+
+          <View style={styles.profileMainDetails}>
+            <View style={styles.nameAndTagsRow}>
+              <Text style={styles.profileNameTitle}>{targetName}</Text>
+              <View style={styles.contextGenderTag}>
+                <Text style={styles.contextGenderTagText}>{genderLabel}</Text>
+              </View>
+              <View style={styles.contextRelTag}>
+                <Text style={styles.contextRelTagText}>{activeProfile?.relationship || 'Crush'}</Text>
+              </View>
+            </View>
+
+            <Text style={styles.profileSummaryLine}>
+              {activeProfile?.vibeSummary || 'Witty & Reserved (Crush Context)'}
+            </Text>
+
+            {/* Personality Chips */}
+            <View style={styles.traitsChipsRow}>
+              {(activeProfile?.personalityTraits || ['witty', 'reserved', 'sarcastic']).map((trait) => (
+                <View key={trait} style={styles.traitChip}>
+                  <Text style={styles.traitChipText}>#{trait}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        </TouchableOpacity>
+      </View>
+
+      {/* 5. RECENT SESSIONS HISTORY */}
+      {recentConversations.length > 1 && (
+        <View style={styles.sectionContainer}>
+          <Text style={styles.sectionMainHeading}>Recent Wingman Sessions</Text>
+          <View style={styles.recentSessionsList}>
+            {recentConversations.slice(1, 4).map((c) => (
+              <TouchableOpacity
+                key={c.id}
+                style={styles.recentSessionItemCard}
+                onPress={() => onOpenConversation(c)}
+                activeOpacity={0.85}
+              >
+                <View style={styles.recentLeftIcon}>
+                  <Feather name="message-square" size={16} color={Palette.indigo600} />
+                </View>
+                <View style={styles.recentDetails}>
+                  <View style={styles.recentTopRow}>
+                    <Text style={styles.recentTargetName}>{c.targetName}</Text>
+                    <View style={styles.recentVibeBadge}>
+                      <Text style={styles.recentVibeText}>{c.currentVibe}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.recentPreviewText} numberOfLines={1}>
+                    "{c.messages[c.messages.length - 1]?.text || c.title}"
+                  </Text>
+                </View>
+                <Feather name="chevron-right" size={18} color={Palette.zinc400} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      )}
+
+      {/* 6. WINGMAN TACTICAL ARSENAL (Quick Feature Highlights) */}
+      <View style={styles.sectionContainer}>
+        <Text style={styles.sectionMainHeading}>Tactical Arsenal</Text>
+        <View style={styles.arsenalRow}>
+          <View style={styles.arsenalCard}>
+            <View style={[styles.arsenalIconCircle, { backgroundColor: '#eff6ff' }]}>
+              <Feather name="zap" size={16} color={Palette.indigo600} />
+            </View>
+            <Text style={styles.arsenalCardTitle}>Vibe Tuning</Text>
+            <Text style={styles.arsenalCardSub}>Flirty, Witty, Playful, Warm</Text>
+          </View>
+
+          <View style={styles.arsenalCard}>
+            <View style={[styles.arsenalIconCircle, { backgroundColor: '#ecfdf5' }]}>
+              <Feather name="activity" size={16} color={Palette.emerald600} />
+            </View>
+            <Text style={styles.arsenalCardTitle}>Subtext Pulse</Text>
+            <Text style={styles.arsenalCardSub}>Decode interest & intentions</Text>
+          </View>
+
+          <View style={styles.arsenalCard}>
+            <View style={[styles.arsenalIconCircle, { backgroundColor: '#fdf2f8' }]}>
+              <Feather name="git-branch" size={16} color="#db2777" />
+            </View>
+            <Text style={styles.arsenalCardTitle}>Dialog Trees</Text>
+            <Text style={styles.arsenalCardSub}>If they say X → Say Y</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* ========================================================================= */}
+      {/* 7. NEW SESSION MODAL (Upload Screenshot, Paste, or Type in Chat) */}
+      {/* ========================================================================= */}
+      <Modal visible={showNewSessionModal} animationType="slide" transparent>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.newSessionModalCard}>
+            {/* Modal Header */}
+            <View style={styles.modalHeaderRow}>
+              <View>
+                <Text style={styles.modalHeadingTitle}>Start New Session</Text>
+                <Text style={styles.modalHeadingSub}>
+                  Coaching context for {targetName} ({genderLabel})
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.modalCloseBtn}
+                onPress={() => {
+                  setShowNewSessionModal(false);
+                  setModalMode('picker');
+                }}
+                activeOpacity={0.7}
+              >
+                <Feather name="x" size={20} color={Palette.zinc700} />
+              </TouchableOpacity>
+            </View>
+
+            {modalMode === 'picker' ? (
+              <View style={styles.modalOptionsContainer}>
+                {/* Option 1: Upload Screenshot */}
+                <TouchableOpacity
+                  style={styles.modalOptionCard}
+                  onPress={handleUploadScreenshot}
+                  activeOpacity={0.85}
+                >
+                  <View style={[styles.optionIconBox, { backgroundColor: '#eff6ff' }]}>
+                    <Feather name="image" size={22} color={Palette.indigo600} />
+                  </View>
+                  <View style={styles.optionTextBox}>
+                    <Text style={styles.optionTitle}>Upload Chat Screenshot</Text>
+                    <Text style={styles.optionDescription}>
+                      AI scans the conversation & creates this session on top
+                    </Text>
+                  </View>
+                  <Feather name="chevron-right" size={20} color={Palette.zinc400} />
+                </TouchableOpacity>
+
+                {/* Option 2: Paste Chat Text */}
+                <TouchableOpacity
+                  style={styles.modalOptionCard}
+                  onPress={() => setModalMode('paste')}
+                  activeOpacity={0.85}
+                >
+                  <View style={[styles.optionIconBox, { backgroundColor: '#fdf2f8' }]}>
+                    <Feather name="clipboard" size={22} color="#db2777" />
+                  </View>
+                  <View style={styles.optionTextBox}>
+                    <Text style={styles.optionTitle}>Paste Chat Text</Text>
+                    <Text style={styles.optionDescription}>
+                      Paste what {targetName} sent you from WhatsApp or Tinder
+                    </Text>
+                  </View>
+                  <Feather name="chevron-right" size={20} color={Palette.zinc400} />
+                </TouchableOpacity>
+
+                {/* Option 3: Type in Chat Directly */}
+                <TouchableOpacity
+                  style={styles.modalOptionCard}
+                  onPress={handleTypeInChat}
+                  activeOpacity={0.85}
+                >
+                  <View style={[styles.optionIconBox, { backgroundColor: Palette.zinc100 }]}>
+                    <Feather name="message-square" size={22} color={Palette.zinc900} />
+                  </View>
+                  <View style={styles.optionTextBox}>
+                    <Text style={styles.optionTitle}>Type in Chat Directly</Text>
+                    <Text style={styles.optionDescription}>
+                      Jump into full Chat Studio & consult Vibely AI
+                    </Text>
+                  </View>
+                  <Feather name="chevron-right" size={20} color={Palette.zinc400} />
+                </TouchableOpacity>
+              </View>
+            ) : (
+              /* Paste Input View */
+              <View style={styles.pasteSectionInModal}>
+                <View style={styles.pasteHeaderRow}>
+                  <Text style={styles.pasteInputLabel}>What did {targetName} say?</Text>
+                  <TouchableOpacity
+                    style={styles.pasteFromClipBtn}
+                    onPress={handlePasteFromClipboard}
+                    activeOpacity={0.7}
+                  >
+                    <Feather name="clipboard" size={12} color={Palette.indigo600} />
+                    <Text style={styles.pasteFromClipText}>Paste Clipboard</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <TextInput
+                  style={styles.pasteInputArea}
+                  value={pasteText}
+                  onChangeText={setPasteText}
+                  placeholder={`e.g. Probably just staying home lol`}
+                  placeholderTextColor={Palette.zinc400}
+                  multiline
+                  autoFocus
+                />
+
+                <View style={styles.pasteModalActions}>
+                  <TouchableOpacity
+                    style={styles.backToPickerBtn}
+                    onPress={() => setModalMode('picker')}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.backToPickerText}>Back</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.createFromPasteBtn,
+                      pasteText.trim().length === 0 && { opacity: 0.5 },
+                    ]}
+                    onPress={handlePasteSubmit}
+                    disabled={pasteText.trim().length === 0}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.createFromPasteBtnText}>Create & Show on Top</Text>
+                    <Feather name="check" size={14} color="#ffffff" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
+    </ScrollView>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 110,
+  },
+
+  /* 1. TOP STATUS HEADER */
+  topStatusHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+    paddingTop: 4,
+  },
+  appBrandTitle: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: Palette.zinc900,
+    letterSpacing: -0.5,
+  },
+  appBrandSub: {
+    fontSize: 12,
+    color: Palette.zinc500,
+    fontWeight: '600',
+  },
+  onlineBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#ecfdf5',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 9999,
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+  },
+  onlineGreenDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Palette.emerald600,
+  },
+  onlineBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Palette.emerald600,
+  },
+
+  /* 2. TOP CHAT CARD (SHOW ON TOP LIKE CURRENT CONVO IN A CARD OF CHAT) */
+  topChatCardSection: {
+    marginBottom: 16,
+  },
+  sectionTitleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  sectionBadgeBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  sectionBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: Palette.indigo600,
+    letterSpacing: 0.5,
+  },
+  pulsePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#ecfdf5',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 9999,
+  },
+  pulsePillText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: Palette.emerald600,
+  },
+  chatCardOnTop: {
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    padding: 16,
+    ...ThemeShadows.md,
+  },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  cardAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#f4f4f5',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cardAvatarEmoji: {
+    fontSize: 22,
+  },
+  cardTargetDetails: {
+    flex: 1,
+  },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 2,
+  },
+  cardTargetName: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: Palette.zinc900,
+  },
+  cardGenderChip: {
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+  },
+  cardGenderText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Palette.indigo600,
+  },
+  cardRelChip: {
+    backgroundColor: Palette.zinc100,
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+  },
+  cardRelText: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: Palette.zinc700,
+  },
+  cardVibeSummary: {
+    fontSize: 12,
+    color: Palette.zinc500,
+    fontWeight: '600',
+  },
+  openStudioIcon: {
+    padding: 4,
+  },
+
+  /* Preview bubbles inside top card */
+  cardPreviewContainer: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 12,
+    gap: 10,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+  },
+  previewBubbleThem: {
+    backgroundColor: '#ffffff',
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  previewLabelThem: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: Palette.zinc500,
+    marginBottom: 2,
+  },
+  previewTextThem: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Palette.zinc900,
+    lineHeight: 18,
+  },
+  previewBubbleAi: {
+    backgroundColor: '#eff6ff',
+    borderRadius: 10,
+    padding: 10,
+    borderLeftWidth: 3,
+    borderLeftColor: Palette.indigo600,
+  },
+  aiSnippetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 2,
+  },
+  aiSnippetLabel: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: Palette.indigo600,
+    letterSpacing: 0.3,
+  },
+  aiSnippetText: {
+    fontSize: 12,
+    color: Palette.zinc800,
+    lineHeight: 16,
+  },
+
+  /* Card footer */
+  cardFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  cardFooterHint: {
+    fontSize: 11,
+    color: Palette.zinc500,
+    fontWeight: '600',
+  },
+  cardCtaBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: Palette.zinc900,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+  },
+  cardCtaBtnText: {
+    fontSize: 11.5,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+
+  /* 3. START NEW SESSION BUTTON */
+  newSessionActionSection: {
+    marginBottom: 20,
+  },
+  startSessionPrimaryBtn: {
+    borderRadius: 16,
+    overflow: 'hidden',
+    ...ThemeShadows.sm,
+  },
+  startSessionGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  startSessionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  plusIconSquare: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  startSessionTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  startSessionSubtitle: {
+    fontSize: 11,
+    color: Palette.zinc400,
+    marginTop: 1,
+  },
+
+  /* SECTIONS COMMON */
+  sectionContainer: {
+    marginBottom: 20,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  sectionMainHeading: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: Palette.zinc900,
+    letterSpacing: -0.2,
+  },
+  switchProfileLink: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Palette.indigo600,
+  },
+
+  /* 4. ACTIVE PROFILE CARD */
+  profileContextCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    gap: 12,
+    ...ThemeShadows.sm,
+  },
+  profileAvatarLarge: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: '#f4f4f5',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileAvatarText: {
+    fontSize: 24,
+  },
+  profileMainDetails: {
+    flex: 1,
+  },
+  nameAndTagsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 2,
+  },
+  profileNameTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: Palette.zinc900,
+  },
+  contextGenderTag: {
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+  },
+  contextGenderTagText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Palette.indigo600,
+  },
+  contextRelTag: {
+    backgroundColor: Palette.zinc100,
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+  },
+  contextRelTagText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Palette.zinc700,
+  },
+  profileSummaryLine: {
+    fontSize: 12,
+    color: Palette.zinc500,
+    marginBottom: 6,
+  },
+  traitsChipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+  },
+  traitChip: {
+    backgroundColor: Palette.zinc100,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  traitChipText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: Palette.zinc600,
+  },
+
+  /* 5. RECENT SESSIONS */
+  recentSessionsList: {
+    gap: 8,
+  },
+  recentSessionItemCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    gap: 10,
+    ...ThemeShadows.sm,
+  },
+  recentLeftIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    backgroundColor: Palette.zinc100,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  recentDetails: {
+    flex: 1,
+  },
+  recentTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 2,
+  },
+  recentTargetName: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: Palette.zinc900,
+  },
+  recentVibeBadge: {
+    backgroundColor: Palette.zinc100,
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+  },
+  recentVibeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Palette.zinc600,
+  },
+  recentPreviewText: {
+    fontSize: 12,
+    color: Palette.zinc500,
+  },
+
+  /* 6. ARSENAL ROW */
+  arsenalRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  arsenalCard: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    alignItems: 'flex-start',
+    ...ThemeShadows.sm,
+  },
+  arsenalIconCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  arsenalCardTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: Palette.zinc900,
+    marginBottom: 2,
+  },
+  arsenalCardSub: {
+    fontSize: 10,
+    color: Palette.zinc500,
+    lineHeight: 14,
+  },
+
+  /* 7. NEW SESSION MODAL */
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(9, 9, 11, 0.55)',
+    justifyContent: 'flex-end',
+  },
+  newSessionModalCard: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 20,
+    paddingBottom: 36,
+  },
+  modalHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  modalHeadingTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: Palette.zinc900,
+  },
+  modalHeadingSub: {
+    fontSize: 12,
+    color: Palette.zinc500,
+    marginTop: 2,
+  },
+  modalCloseBtn: {
+    padding: 6,
+  },
+  modalOptionsContainer: {
+    gap: 10,
+  },
+  modalOptionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    gap: 12,
+  },
+  optionIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  optionTextBox: {
+    flex: 1,
+  },
+  optionTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: Palette.zinc900,
+    marginBottom: 2,
+  },
+  optionDescription: {
+    fontSize: 11,
+    color: Palette.zinc500,
+    lineHeight: 15,
+  },
+
+  /* Paste section in modal */
+  pasteSectionInModal: {
+    paddingTop: 4,
+  },
+  pasteHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  pasteInputLabel: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: Palette.zinc900,
+  },
+  pasteFromClipBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: Palette.indigo50,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  pasteFromClipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Palette.indigo600,
+  },
+  pasteInputArea: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 14,
+    minHeight: 100,
+    fontSize: 14,
+    color: Palette.zinc900,
+    textAlignVertical: 'top',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 16,
+  },
+  pasteModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+  },
+  backToPickerBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 8,
+    backgroundColor: Palette.zinc100,
+  },
+  backToPickerText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Palette.zinc700,
+  },
+  createFromPasteBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Palette.zinc900,
+    paddingVertical: 12,
+    borderRadius: 8,
+    gap: 6,
+  },
+  createFromPasteBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+
+  /* SKELETON STYLES */
+  skeletonCard: {
+    backgroundColor: '#f4f4f5',
+    borderRadius: 18,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#e4e4e7',
+    gap: 12,
+  },
+  skeletonCardSmall: {
+    backgroundColor: '#f4f4f5',
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e4e4e7',
+  },
+  skeletonLineTop: {
+    width: '40%',
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#e4e4e7',
+  },
+  skeletonLineMid: {
+    width: '85%',
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#e4e4e7',
+  },
+  skeletonLineShort: {
+    width: '60%',
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#e4e4e7',
+  },
+});
