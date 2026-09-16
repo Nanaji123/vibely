@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl } 
 import { Feather } from '@expo/vector-icons';
 import { Palette, ThemeColors } from '../theme/colors';
 import { ThemeShadows } from '../theme/shadows';
-import { ConversationModel, TargetProfileModel } from '../domain';
+import { ConversationModel, TargetProfileModel } from '../domain/index';
 
 interface PulseAnalysisScreenProps {
   activeProfile?: TargetProfileModel;
@@ -35,8 +35,8 @@ export const PulseAnalysisScreen: React.FC<PulseAnalysisScreenProps> = ({
 
   // Real or sample chat messages from conversation
   const lastTargetMsg =
-    conversation?.messages.find(m => m.sender === 'you' && m.text.includes('said:'))?.text.replace(/^She said:|^He said:/i, '').replace(/["']/g, '').trim() ||
-    conversation?.messages[0]?.text.replace(/["']/g, '').trim() ||
+    conversation?.messages?.find(m => m.sender === 'you' && m.text.includes('said:'))?.text.replace(/^She said:|^He said:/i, '').replace(/["']/g, '').trim() ||
+    conversation?.messages?.[0]?.text.replace(/["']/g, '').trim() ||
     'Probably just staying home lol';
 
   return (

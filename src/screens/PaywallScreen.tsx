@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-nati
 import { Feather } from '@expo/vector-icons';
 import { Palette, ThemeColors } from '../theme/colors';
 import { ThemeShadows } from '../theme/shadows';
-import { UserSubscriptionModel } from '../domain';
+import { UserSubscriptionModel } from '../domain/index';
 
 interface PaywallScreenProps {
   subscription: UserSubscriptionModel;

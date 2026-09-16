@@ -67,3 +67,7 @@ export interface UserSubscription {
   creditsRemaining: number;
   unlimited: boolean;
 }
+
+// Re-export domain models for full compatibility
+export * from '../domain/index';
+

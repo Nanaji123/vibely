@@ -17,7 +17,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import { Palette, ThemeColors } from '../theme/colors';
 import { ThemeShadows } from '../theme/shadows';
-import { ConversationModel, TargetProfileModel } from '../domain';
+import { ConversationModel, TargetProfileModel } from '../domain/index';
 import { AIService } from '../services/aiService';
 
 interface HomeScreenProps {
@@ -89,15 +89,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         if (onCreateCustomSession) {
           onCreateCustomSession(lastMsg, 'screenshot');
         }
-      } else {
-        if (onCreateCustomSession) {
-          onCreateCustomSession('Probably just staying home lol', 'screenshot');
-        }
       }
     } catch (e) {
-      if (onCreateCustomSession) {
-        onCreateCustomSession('Probably just staying home lol', 'screenshot');
-      }
+      // Ignore user cancellation or access denial
     }
     setShowNewSessionModal(false);
     setModalMode('picker');
@@ -226,8 +220,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   {currentConvo.targetName} said:
                 </Text>
                 <Text style={styles.previewTextThem} numberOfLines={2}>
-                  "{currentConvo.messages.find(m => m.sender === 'you' && m.text.includes('said:'))?.text.replace(/^She said:|^He said:/i, '').replace(/["']/g, '').trim() ||
-                    currentConvo.messages[currentConvo.messages.length - 1]?.text ||
+                  "{currentConvo.messages?.find(m => m.sender === 'you' && m.text.includes('said:'))?.text.replace(/^She said:|^He said:/i, '').replace(/["']/g, '').trim() ||
+                    currentConvo.messages?.[currentConvo.messages.length - 1]?.text ||
                     'Probably just staying home lol'}"
                 </Text>
               </View>
@@ -239,7 +233,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   <Text style={styles.aiSnippetLabel}>AI WINGMAN SCENE ADVICE</Text>
                 </View>
                 <Text style={styles.aiSnippetText} numberOfLines={2}>
-                  {currentConvo.messages.find(m => m.sender === 'ai' && m.sceneContext)?.sceneContext ||
+                  {currentConvo.messages?.find(m => m.sender === 'ai' && m.sceneContext)?.sceneContext ||
                     "She's signaling low weekend plans and testing if you'll lead. Take initiative!"}
                 </Text>
               </View>
@@ -358,7 +352,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                     </View>
                   </View>
                   <Text style={styles.recentPreviewText} numberOfLines={1}>
-                    "{c.messages[c.messages.length - 1]?.text || c.title}"
+                    "{c.messages?.[c.messages.length - 1]?.text || c.title}"
                   </Text>
                 </View>
                 <Feather name="chevron-right" size={18} color={Palette.zinc400} />

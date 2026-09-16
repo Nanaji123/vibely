@@ -11,7 +11,7 @@ import {
 import { Feather } from '@expo/vector-icons';
 import { Palette, ThemeColors } from '../theme/colors';
 import { ThemeShadows } from '../theme/shadows';
-import { TargetProfileModel } from '../domain';
+import { TargetProfileModel } from '../domain/index';
 
 interface ProfileManagerScreenProps {
   profiles: TargetProfileModel[];

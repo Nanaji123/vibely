@@ -6,7 +6,7 @@ import {
   TargetProfileModel,
   AIReplyModel,
   UserSubscriptionModel,
-} from '../domain';
+} from '../domain/index';
 import { AIService } from '../services/aiService';
 
 export const INITIAL_PROFILES: TargetProfileModel[] = [

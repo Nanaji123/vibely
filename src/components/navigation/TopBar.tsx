@@ -11,7 +11,7 @@ import {
 import { Feather } from '@expo/vector-icons';
 import { Palette, ThemeColors } from '../../theme/colors';
 import { ThemeShadows } from '../../theme/shadows';
-import { TargetProfileModel, UserSubscriptionModel, ConversationModel } from '../../domain';
+import { TargetProfileModel, UserSubscriptionModel, ConversationModel } from '../../domain/index';
 
 export interface WingmanNotification {
   id: string;

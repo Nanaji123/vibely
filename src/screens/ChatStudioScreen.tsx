@@ -15,7 +15,12 @@ import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { Palette, ThemeColors } from '../theme/colors';
 import { ThemeShadows } from '../theme/shadows';
-import { ChatMessageModel, TargetProfileModel, SuggestionOptionModel, DialogTreeNodeModel } from '../domain';
+import {
+  ChatMessageModel,
+  TargetProfileModel,
+  SuggestionOptionModel,
+  DialogTreeNodeModel,
+} from '../domain/index';
 import { AIService } from '../services/aiService';
 
 interface ChatStudioScreenProps {
@@ -182,7 +187,7 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
         setInputText(prompt);
       }
     } catch (e) {
-      setInputText(`She said: "Probably just staying home lol"`);
+      // Ignore cancellation or permissions denial
     }
   };
 
