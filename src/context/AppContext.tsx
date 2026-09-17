@@ -1,158 +1,60 @@
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { useQuery, useMutation, useAction, useConvexAuth } from 'convex/react';
+import { api } from '../../convex/_generated/api';
+import type { Id } from '../../convex/_generated/dataModel';
 import {
   ChatMessageModel,
   ConversationModel,
-  PulseAnalysisModel,
   TargetProfileModel,
-  AIReplyModel,
   UserSubscriptionModel,
 } from '../domain/index';
-import { AIService } from '../services/aiService';
 
-export const INITIAL_PROFILES: TargetProfileModel[] = [
-  {
-    id: 'prof-1',
-    name: 'Laxmi',
-    gender: 'female',
-    relationship: 'crush',
-    personalityTraits: ['humorous', 'reserved', 'sarcastic', 'teasing'],
-    likes: ['Movies', 'Manhwa', 'Gaming', 'Matcha Latte'],
-    thingsToAvoid: ['Too serious', 'Too many questions', 'Long paragraphs'],
-    vibeSummary: 'Witty & Reserved (Crush)',
-    avatarEmoji: '❤️',
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: 'prof-2',
-    name: 'Sarah',
-    gender: 'female',
-    relationship: 'dating',
-    personalityTraits: ['romantic', 'talkative', 'humorous'],
-    likes: ['Sushi', 'Indie Music', 'Travel', 'Art'],
-    thingsToAvoid: ['Late replies', 'Vague plans'],
-    vibeSummary: 'Warm & Expressive (Dating)',
-    avatarEmoji: '💕',
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: 'prof-3',
-    name: 'Alex',
-    gender: 'male',
-    relationship: 'friend',
-    personalityTraits: ['bro', 'direct', 'sarcastic'],
-    likes: ['Valorant', 'Gym', 'Memes', 'Anime'],
-    thingsToAvoid: ['Forced romantic talk'],
-    vibeSummary: 'Casual Banter (Friend)',
-    avatarEmoji: '😎',
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: 'prof-4',
-    name: 'Elena',
-    gender: 'female',
-    relationship: 'colleague',
-    personalityTraits: ['reserved', 'direct', 'dry_texter'],
-    likes: ['Product Design', 'Tech', 'Espresso'],
-    thingsToAvoid: ['Casual slang', 'Unprepared meetings'],
-    vibeSummary: 'Professional & Direct (Work)',
-    avatarEmoji: '💼',
-    updatedAt: new Date().toISOString(),
-  },
-];
+const FALLBACK_PROFILE: TargetProfileModel = {
+  id: 'prof-fallback',
+  name: 'Target Profile',
+  gender: 'female',
+  relationship: 'crush',
+  personalityTraits: [],
+  likes: [],
+  thingsToAvoid: [],
+  vibeSummary: 'New Profile',
+  avatarEmoji: '❤️',
+  updatedAt: new Date().toISOString(),
+};
 
-export const INITIAL_CONVERSATIONS: ConversationModel[] = [
-  {
-    id: 'conv-1',
-    title: 'Weekend Plans with Sarah',
-    targetName: 'Sarah',
-    relationship: 'dating',
-    personalityTraits: ['romantic', 'talkative'],
-    messages: [
-      {
-        id: 'm1',
-        sender: 'ai',
-        text: "Hey! I'm your wingman for Sarah. What did she text you? Tell me what she said, or upload a screenshot and I'll break down her signals.",
-      },
-      {
-        id: 'm2',
-        sender: 'you',
-        text: "She said: 'Probably just staying home lol'",
-      },
-      {
-        id: 'm3',
-        sender: 'ai',
-        text: "She's signaling her weekend is open and testing if you'll take initiative! Here are 3 Flirty ways to reply:",
-        sceneContext: "Scene Breakdown: She has no plans and wants you to lead. Don't ask boring questions—take charge.",
-        suggestions: [
-          {
-            id: 's1',
-            category: 'Flirty',
-            toneVariant: 'Bold & Direct',
-            replyText: "Staying home? Sounds like you need better plans 😏 I know a great spot.",
-          },
-          {
-            id: 's2',
-            category: 'Flirty',
-            toneVariant: 'Playful Tease',
-            replyText: "Couch potato mode? Only if you're saving a spot for me 😉",
-          },
-          {
-            id: 's3',
-            category: 'Flirty',
-            toneVariant: 'Smooth & Magnetic',
-            replyText: "Staying in wouldn't be nearly as boring with the right company ❤️",
-          },
-        ],
-      },
-    ],
-    currentVibe: 'flirty',
-    pulseScore: 78,
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: 'conv-2',
-    title: 'Dry Texting from Laxmi',
-    targetName: 'Laxmi',
-    relationship: 'crush',
-    personalityTraits: ['sarcastic', 'teasing'],
-    messages: [
-      {
-        id: 'm4',
-        sender: 'you',
-        text: "She said: 'haha maybe 😂'",
-      },
-      {
-        id: 'm5',
-        sender: 'ai',
-        text: "Classic dry tease! Flip the script with teasing friction to wake up her engagement:",
-        sceneContext: "Scene Breakdown: 'Maybe' is playful reluctance. She wants to see if you can hold your frame.",
-        suggestions: [
-          {
-            id: 's4',
-            category: 'Witty',
-            toneVariant: 'Banter Callout',
-            replyText: "That 'maybe' sounds like a solid yes disguised as plausible deniability 😏",
-          },
-          {
-            id: 's5',
-            category: 'Witty',
-            toneVariant: 'Sharp Tease',
-            replyText: "Careful, laughing at all my texts is stage one of catching feelings 😉",
-          },
-          {
-            id: 's6',
-            category: 'Witty',
-            toneVariant: 'Playful Challenge',
-            replyText: "Don't laugh too hard, you haven't even seen my best charm yet 😂",
-          },
-        ],
-      },
-    ],
-    currentVibe: 'witty',
-    pulseScore: 84,
-    updatedAt: new Date().toISOString(),
-  },
-];
+const EMPTY_CONVERSATION: ConversationModel = {
+  id: '',
+  title: '',
+  targetName: '',
+  relationship: '',
+  personalityTraits: [],
+  messages: [],
+  currentVibe: 'flirty',
+  updatedAt: new Date().toISOString(),
+};
+
+const pronoun = (gender: string, form: 'subject' | 'object') => {
+  if (gender === 'male') return form === 'subject' ? 'he' : 'him';
+  if (gender === 'other') return 'they';
+  return form === 'subject' ? 'she' : 'her';
+};
+
+const buildWelcomeMessage = (profile: TargetProfileModel) =>
+  `Hey! I'm your wingman for ${profile.name}. What did ${pronoun(profile.gender, 'subject')} text you? Tell me or upload a screenshot and I'll break down the scene!`;
+
+const pickTopSuggestions = (
+  responses: { category: string; replyText: string; explanation: string }[],
+  desiredVibe: string
+) => {
+  const vibeMatch = responses.filter((r) => r.category.toLowerCase() === desiredVibe.toLowerCase());
+  const pool = vibeMatch.length >= 3 ? vibeMatch : responses;
+  return pool.slice(0, 3).map((r, i) => ({
+    id: `s-${Date.now()}-${i}`,
+    category: r.category,
+    replyText: r.replyText,
+    toneVariant: r.explanation,
+  }));
+};
 
 interface AppContextType {
   profiles: TargetProfileModel[];
@@ -160,96 +62,184 @@ interface AppContextType {
   conversations: ConversationModel[];
   currentConversation: ConversationModel;
   subscription: UserSubscriptionModel;
-  selectProfile: (profile: TargetProfileModel) => void;
-  addProfile: (profile: Omit<TargetProfileModel, 'id' | 'updatedAt'>) => TargetProfileModel;
-  startNewSession: () => void;
+  selectProfile: (profile: TargetProfileModel) => Promise<void>;
+  addProfile: (profile: Omit<TargetProfileModel, 'id' | 'updatedAt'>) => Promise<TargetProfileModel>;
+  editProfile: (id: string, updated: Partial<TargetProfileModel>) => Promise<void>;
+  deleteProfile: (id: string) => Promise<void>;
+  startNewSession: () => Promise<void>;
   createCustomSession: (
     rawText: string,
     mode: 'screenshot' | 'paste' | 'type',
     profile?: TargetProfileModel
-  ) => ConversationModel;
+  ) => Promise<void>;
   loadConversation: (conv: ConversationModel) => void;
-  updateMessages: (messages: ChatMessageModel[]) => void;
-  updateVibe: (vibe: string) => void;
-  upgradePlan: (plan: 'plus' | 'pro') => void;
-  useCredit: () => boolean;
+  updateMessages: (messages: ChatMessageModel[]) => Promise<void>;
+  updateVibe: (vibe: string) => Promise<void>;
+  upgradePlan: (plan: 'plus' | 'pro') => Promise<void>;
+  useCredit: () => Promise<boolean>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [profiles, setProfiles] = useState<TargetProfileModel[]>(INITIAL_PROFILES);
-  const [activeProfile, setActiveProfile] = useState<TargetProfileModel>(INITIAL_PROFILES[0]);
-  const [conversations, setConversations] = useState<ConversationModel[]>(INITIAL_CONVERSATIONS);
-  const [currentConversation, setCurrentConversation] = useState<ConversationModel>(INITIAL_CONVERSATIONS[0]);
-  const [subscription, setSubscription] = useState<UserSubscriptionModel>({
-    plan: 'free',
-    creditsRemaining: 3,
-    unlimited: false,
-  });
+  const { isAuthenticated } = useConvexAuth();
 
-  const selectProfile = (profile: TargetProfileModel) => {
-    setActiveProfile(profile);
-    setCurrentConversation(prev => ({
-      ...prev,
+  const profilesQuery = useQuery(api.profiles.listProfiles, isAuthenticated ? {} : 'skip');
+  const conversationsQuery = useQuery(api.conversations.listConversations, isAuthenticated ? {} : 'skip');
+  const subscriptionQuery = useQuery(api.subscriptions.getSubscription, isAuthenticated ? {} : 'skip');
+
+  const saveProfileMutation = useMutation(api.profiles.saveProfile);
+  const updateProfileMutation = useMutation(api.profiles.updateProfile);
+  const deleteProfileMutation = useMutation(api.profiles.deleteProfile);
+  const saveConversationMutation = useMutation(api.conversations.saveConversation);
+  const updateConversationMutation = useMutation(api.conversations.updateConversation);
+  const setSubscriptionMutation = useMutation(api.subscriptions.setSubscription);
+  const useCreditMutation = useMutation(api.subscriptions.useCredit);
+  const generateRepliesAction = useAction(api.ai.generateReplies);
+
+  const profiles: TargetProfileModel[] = (profilesQuery ?? []).map((doc) => ({
+    id: doc._id,
+    name: doc.name,
+    gender: doc.gender,
+    relationship: doc.relationship,
+    personalityTraits: doc.personalityTraits,
+    likes: doc.likes,
+    thingsToAvoid: doc.thingsToAvoid,
+    vibeSummary: doc.vibeSummary,
+    avatarEmoji: doc.avatarEmoji,
+    updatedAt: doc.updatedAt,
+  }));
+
+  const conversations: ConversationModel[] = (conversationsQuery ?? []).map((doc) => ({
+    id: doc._id,
+    profileId: doc.profileId,
+    title: doc.title,
+    targetName: doc.targetName,
+    relationship: doc.relationship,
+    personalityTraits: doc.personalityTraits,
+    messages: doc.messages,
+    currentVibe: doc.currentVibe,
+    pulseScore: doc.pulseScore,
+    updatedAt: doc.updatedAt,
+  }));
+
+  const subscription: UserSubscriptionModel = subscriptionQuery
+    ? {
+        plan: subscriptionQuery.plan,
+        creditsRemaining: subscriptionQuery.creditsRemaining,
+        unlimited: subscriptionQuery.unlimited,
+      }
+    : { plan: 'free', creditsRemaining: 3, unlimited: false };
+
+  const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!activeProfileId && profiles.length > 0) {
+      setActiveProfileId(profiles[0].id);
+    }
+  }, [profiles, activeProfileId]);
+
+  const activeProfile = profiles.find((p) => p.id === activeProfileId) ?? profiles[0] ?? FALLBACK_PROFILE;
+  const currentConversation =
+    conversations.find((c) => c.id === currentConversationId) ?? conversations[0] ?? EMPTY_CONVERSATION;
+
+  const selectProfile = async (profile: TargetProfileModel) => {
+    setActiveProfileId(profile.id);
+
+    const existing = conversations.find(
+      (c) => c.profileId === profile.id || c.targetName.toLowerCase() === profile.name.toLowerCase()
+    );
+    if (existing) {
+      setCurrentConversationId(existing.id);
+      return;
+    }
+
+    const newId = await saveConversationMutation({
+      profileId: profile.id,
+      title: `Wingman Session with ${profile.name}`,
       targetName: profile.name,
       relationship: profile.relationship,
       personalityTraits: profile.personalityTraits,
-    }));
+      messages: [{ id: `m-init-${profile.id}`, sender: 'ai', text: buildWelcomeMessage(profile) }],
+      currentVibe: 'witty',
+      pulseScore: 84,
+    });
+    setCurrentConversationId(newId);
   };
 
-  const addProfile = (newProf: Omit<TargetProfileModel, 'id' | 'updatedAt'>) => {
-    const created: TargetProfileModel = {
-      ...newProf,
-      id: `prof-${Date.now()}`,
-      updatedAt: new Date().toISOString(),
-    };
-    setProfiles(prev => [created, ...prev]);
-    selectProfile(created);
-    return created;
+  const addProfile = async (
+    newProf: Omit<TargetProfileModel, 'id' | 'updatedAt'>
+  ): Promise<TargetProfileModel> => {
+    const id = await saveProfileMutation(newProf);
+    setActiveProfileId(id);
+    return { ...newProf, id, updatedAt: new Date().toISOString() };
   };
 
-  const startNewSession = () => {
-    const newSession: ConversationModel = {
-      id: `conv-${Date.now()}`,
+  const editProfile = async (id: string, updated: Partial<TargetProfileModel>) => {
+    const current = profiles.find((p) => p.id === id);
+    if (!current) return;
+    await updateProfileMutation({
+      id: id as Id<'profiles'>,
+      name: updated.name ?? current.name,
+      gender: updated.gender ?? current.gender,
+      relationship: updated.relationship ?? current.relationship,
+      personalityTraits: updated.personalityTraits ?? current.personalityTraits,
+      likes: updated.likes ?? current.likes,
+      thingsToAvoid: updated.thingsToAvoid ?? current.thingsToAvoid,
+      vibeSummary: updated.vibeSummary ?? current.vibeSummary,
+      avatarEmoji: updated.avatarEmoji ?? current.avatarEmoji,
+    });
+  };
+
+  const deleteProfile = async (id: string) => {
+    await deleteProfileMutation({ id: id as Id<'profiles'> });
+    if (activeProfileId === id) {
+      const next = profiles.find((p) => p.id !== id);
+      setActiveProfileId(next ? next.id : null);
+    }
+  };
+
+  const startNewSession = async () => {
+    const newId = await saveConversationMutation({
+      profileId: activeProfile.id,
       title: `Chat with ${activeProfile.name}`,
       targetName: activeProfile.name,
       relationship: activeProfile.relationship,
       personalityTraits: activeProfile.personalityTraits,
       messages: [
         {
-          id: `m-ai-welcome`,
+          id: `m-ai-welcome-${Date.now()}`,
           sender: 'ai',
-          text: `Hey! I'm your wingman for ${activeProfile.name}. What did ${activeProfile.gender === 'female' ? 'she' : 'he'} text you? Tell me or upload a screenshot and I'll break down the scene!`,
+          text: buildWelcomeMessage(activeProfile),
           timestamp: 'Just now',
         },
       ],
       currentVibe: 'flirty',
       pulseScore: 80,
-      updatedAt: new Date().toISOString(),
-    };
-    setCurrentConversation(newSession);
-    setConversations(prev => [newSession, ...prev]);
+    });
+    setCurrentConversationId(newId);
   };
 
-  const createCustomSession = (
+  const createCustomSession = async (
     rawText: string,
     mode: 'screenshot' | 'paste' | 'type',
-    profile = activeProfile
-  ): ConversationModel => {
+    profile: TargetProfileModel = activeProfile
+  ) => {
     const textPrompt = rawText.trim() || 'Probably just staying home lol';
     const userMessageText =
       textPrompt.startsWith('She said:') || textPrompt.startsWith('He said:')
         ? textPrompt
         : `${profile.gender === 'male' ? 'He' : 'She'} said: "${textPrompt}"`;
 
-    const coachResp = AIService.generateCoachSceneResponse(
-      textPrompt,
-      'flirty',
-      profile.relationship,
-      profile.name,
-      (profile.gender as any) || 'female'
-    );
+    const aiResult = await generateRepliesAction({
+      lastMessage: textPrompt,
+      conversationHistory: [],
+      targetName: profile.name,
+      relationship: profile.relationship,
+      personalityTraits: profile.personalityTraits,
+      desiredVibe: 'flirty',
+    });
 
     const userMsg: ChatMessageModel = {
       id: `m-u-${Date.now()}`,
@@ -261,14 +251,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const aiMsg: ChatMessageModel = {
       id: `m-a-${Date.now()}`,
       sender: 'ai',
-      text: coachResp.advice,
-      sceneContext: coachResp.sceneContext,
-      suggestions: coachResp.suggestions,
+      text: aiResult.advice,
+      sceneContext: aiResult.sceneContext,
+      suggestions: pickTopSuggestions(aiResult.responses, 'flirty'),
       timestamp: 'Just now',
     };
 
-    const newSession: ConversationModel = {
-      id: `conv-${Date.now()}`,
+    const newId = await saveConversationMutation({
+      profileId: profile.id,
       title: `${mode === 'screenshot' ? 'Screenshot' : mode === 'paste' ? 'Pasted chat' : 'Dialogue'} with ${profile.name}`,
       targetName: profile.name,
       relationship: profile.relationship,
@@ -276,47 +266,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       messages: [userMsg, aiMsg],
       currentVibe: 'flirty',
       pulseScore: 85,
-      updatedAt: new Date().toISOString(),
-    };
-
-    setCurrentConversation(newSession);
-    setConversations(prev => [newSession, ...prev]);
-    return newSession;
+    });
+    setCurrentConversationId(newId);
   };
 
   const loadConversation = (conv: ConversationModel) => {
-    setCurrentConversation(conv);
-    const matched = profiles.find(p => p.name.toLowerCase() === conv.targetName.toLowerCase());
-    if (matched) setActiveProfile(matched);
+    setCurrentConversationId(conv.id);
+    const matched = profiles.find((p) => p.name.toLowerCase() === conv.targetName.toLowerCase());
+    if (matched) setActiveProfileId(matched.id);
   };
 
-  const updateMessages = (messages: ChatMessageModel[]) => {
-    setCurrentConversation(prev => {
-      const updated = { ...prev, messages, updatedAt: new Date().toISOString() };
-      setConversations(list => list.map(c => c.id === prev.id ? updated : c));
-      return updated;
+  const updateMessages = async (messages: ChatMessageModel[]) => {
+    if (!currentConversation.id) return;
+    await updateConversationMutation({ id: currentConversation.id as Id<'conversations'>, messages });
+  };
+
+  const updateVibe = async (vibe: string) => {
+    if (!currentConversation.id) return;
+    await updateConversationMutation({
+      id: currentConversation.id as Id<'conversations'>,
+      messages: currentConversation.messages,
+      currentVibe: vibe,
     });
   };
 
-  const updateVibe = (vibe: string) => {
-    setCurrentConversation(prev => ({ ...prev, currentVibe: vibe }));
+  const upgradePlan = async (plan: 'plus' | 'pro') => {
+    await setSubscriptionMutation({ plan, creditsRemaining: 9999, unlimited: true });
   };
 
-  const upgradePlan = (plan: 'plus' | 'pro') => {
-    setSubscription({
-      plan,
-      creditsRemaining: 9999,
-      unlimited: true,
-    });
-  };
-
-  const useCredit = (): boolean => {
-    if (subscription.unlimited) return true;
-    if (subscription.creditsRemaining > 0) {
-      setSubscription(prev => ({ ...prev, creditsRemaining: prev.creditsRemaining - 1 }));
-      return true;
-    }
-    return false;
+  const useCredit = async (): Promise<boolean> => {
+    return await useCreditMutation({});
   };
 
   return (
@@ -329,6 +308,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         subscription,
         selectProfile,
         addProfile,
+        editProfile,
+        deleteProfile,
         startNewSession,
         createCustomSession,
         loadConversation,

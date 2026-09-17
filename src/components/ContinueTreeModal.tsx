@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Modal, View, Text, TouchableOpacity, ScrollView, StyleSheet, TextInput } from 'react-native';
+import { Modal, View, Text, TouchableOpacity, ScrollView, StyleSheet, TextInput, Platform, KeyboardAvoidingView } from 'react-native';
 import { COLORS, SPACING, RADIUS, SHADOWS } from '../constants/theme';
 import { ResponseOption, BranchingNode } from '../types';
 import { AIService } from '../services/aiService';
@@ -52,7 +52,11 @@ export const ContinueTreeModal: React.FC<ContinueTreeModalProps> = ({
 
   return (
     <Modal visible={visible} animationType="slide" transparent>
-      <View style={styles.overlay}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <View style={styles.overlay}>
         <View style={styles.modalCard}>
           {/* Header */}
           <View style={styles.header}>
@@ -180,7 +184,8 @@ export const ContinueTreeModal: React.FC<ContinueTreeModalProps> = ({
           </View>
         </View>
       </View>
-    </Modal>
+    </KeyboardAvoidingView>
+  </Modal>
   );
 };
 

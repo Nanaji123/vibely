@@ -10,6 +10,8 @@ import {
   Platform,
   RefreshControl,
   Animated,
+  KeyboardAvoidingView,
+  BackHandler,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -61,6 +63,21 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     ).start();
   }, [skeletonAnim]);
 
+  // Handle Android Back Gesture / Button
+  useEffect(() => {
+    const onBackPress = () => {
+      if (showNewSessionModal) {
+        setShowNewSessionModal(false);
+        setModalMode('picker');
+        return true;
+      }
+      return false;
+    };
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => subscription.remove();
+  }, [showNewSessionModal]);
+
   const onRefresh = () => {
     setRefreshing(true);
     setTimeout(() => {
@@ -68,9 +85,39 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     }, 850);
   };
 
-  // Top/Current active conversation (always the first one in the list)
-  const currentConvo = recentConversations[0];
-  const targetName = activeProfile?.name || currentConvo?.targetName || 'Sarah';
+  // Top/Current active conversation matching activeProfile
+  const activeConvo = recentConversations.find(
+    (c) =>
+      (activeProfile?.id && c.profileId === activeProfile.id) ||
+      (activeProfile?.name && c.targetName.toLowerCase() === activeProfile.name.toLowerCase())
+  );
+
+  const currentConvo: ConversationModel = activeConvo || {
+    id: `conv-${activeProfile?.id || 'default'}`,
+    profileId: activeProfile?.id,
+    title: `Wingman Session with ${activeProfile?.name || 'Target'}`,
+    targetName: activeProfile?.name || 'Target',
+    relationship: activeProfile?.relationship || 'crush',
+    personalityTraits: activeProfile?.personalityTraits || [],
+    messages: [
+      {
+        id: `m-init-${activeProfile?.id || 'default'}`,
+        sender: 'ai',
+        text: `Hey! I'm your wingman for ${activeProfile?.name || 'your target'}. What did ${
+          activeProfile?.gender === 'male' ? 'he' : activeProfile?.gender === 'female' ? 'she' : 'they'
+        } text you? Tell me what ${
+          activeProfile?.gender === 'male' ? 'he' : activeProfile?.gender === 'female' ? 'she' : 'they'
+        } said, or upload a screenshot and I'll break down ${
+          activeProfile?.gender === 'male' ? 'his' : activeProfile?.gender === 'female' ? 'her' : 'their'
+        } signals.`,
+      },
+    ],
+    currentVibe: 'witty',
+    pulseScore: 84,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const targetName = activeProfile?.name || currentConvo.targetName;
   const targetGender = activeProfile?.gender || 'female';
   const genderLabel = targetGender === 'female' ? '👩 Her' : targetGender === 'male' ? '👨 Him' : '🧑 Them';
 
@@ -125,6 +172,25 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     onStartNewSession();
   };
 
+  // Entrance Animation
+  const contentFade = useRef(new Animated.Value(0)).current;
+  const contentSlide = useRef(new Animated.Value(18)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(contentFade, {
+        toValue: 1,
+        duration: 350,
+        useNativeDriver: true,
+      }),
+      Animated.timing(contentSlide, {
+        toValue: 0,
+        duration: 350,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [contentFade, contentSlide]);
+
   return (
     <ScrollView
       style={styles.container}
@@ -138,6 +204,12 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         />
       }
     >
+      <Animated.View
+        style={{
+          opacity: contentFade,
+          transform: [{ translateY: contentSlide }],
+        }}
+      >
       {/* 1. TOP HEADER & STATUS BAR */}
       <View style={styles.topStatusHeader}>
         <View>
@@ -188,22 +260,24 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             <View style={styles.cardHeaderRow}>
               <View style={styles.cardAvatar}>
                 <Text style={styles.cardAvatarEmoji}>
-                  {activeProfile?.avatarEmoji || (currentConvo.targetName === 'Sarah' ? '💕' : '❤️')}
+                  {activeProfile?.avatarEmoji || (targetName === 'Sarah' ? '💕' : '❤️')}
                 </Text>
               </View>
 
               <View style={styles.cardTargetDetails}>
                 <View style={styles.nameRow}>
-                  <Text style={styles.cardTargetName}>{currentConvo.targetName}</Text>
+                  <Text style={styles.cardTargetName}>{targetName}</Text>
                   <View style={styles.cardGenderChip}>
                     <Text style={styles.cardGenderText}>{genderLabel}</Text>
                   </View>
                   <View style={styles.cardRelChip}>
-                    <Text style={styles.cardRelText}>{currentConvo.relationship.toUpperCase()}</Text>
+                    <Text style={styles.cardRelText}>
+                      {(activeProfile?.relationship || currentConvo.relationship || 'crush').toUpperCase()}
+                    </Text>
                   </View>
                 </View>
                 <Text style={styles.cardVibeSummary}>
-                  {currentConvo.title || `Chat with ${currentConvo.targetName}`}
+                  {activeProfile?.vibeSummary || currentConvo.title || `Chat with ${targetName}`}
                 </Text>
               </View>
 
@@ -217,12 +291,12 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               {/* Target Message Preview */}
               <View style={styles.previewBubbleThem}>
                 <Text style={styles.previewLabelThem}>
-                  {currentConvo.targetName} said:
+                  {targetName} said:
                 </Text>
                 <Text style={styles.previewTextThem} numberOfLines={2}>
-                  "{currentConvo.messages?.find(m => m.sender === 'you' && m.text.includes('said:'))?.text.replace(/^She said:|^He said:/i, '').replace(/["']/g, '').trim() ||
+                  "{currentConvo.messages?.find(m => m.sender === 'you' && m.text.includes('said:'))?.text.replace(/^She said:|^He said:|^They said:/i, '').replace(/["']/g, '').trim() ||
                     currentConvo.messages?.[currentConvo.messages.length - 1]?.text ||
-                    'Probably just staying home lol'}"
+                    `Waiting for ${targetName}'s message...`}"
                 </Text>
               </View>
 
@@ -234,7 +308,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 </View>
                 <Text style={styles.aiSnippetText} numberOfLines={2}>
                   {currentConvo.messages?.find(m => m.sender === 'ai' && m.sceneContext)?.sceneContext ||
-                    "She's signaling low weekend plans and testing if you'll lead. Take initiative!"}
+                    `Wingman ready for ${targetName}. Upload screenshot or type their last text to generate responses!`}
                 </Text>
               </View>
             </View>
@@ -255,10 +329,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       <View style={styles.newSessionActionSection}>
         <TouchableOpacity
           style={styles.startSessionPrimaryBtn}
-          onPress={() => {
-            setModalMode('picker');
-            setShowNewSessionModal(true);
-          }}
+          onPress={onStartNewSession}
           activeOpacity={0.88}
         >
           <LinearGradient
@@ -295,7 +366,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
         <TouchableOpacity
           style={styles.profileContextCard}
-          onPress={onSwitchProfile}
+          onPress={() => onOpenConversation(currentConvo)}
           activeOpacity={0.85}
         >
           <View style={styles.profileAvatarLarge}>
@@ -391,141 +462,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           </View>
         </View>
       </View>
+      </Animated.View>
 
-      {/* ========================================================================= */}
-      {/* 7. NEW SESSION MODAL (Upload Screenshot, Paste, or Type in Chat) */}
-      {/* ========================================================================= */}
-      <Modal visible={showNewSessionModal} animationType="slide" transparent>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.newSessionModalCard}>
-            {/* Modal Header */}
-            <View style={styles.modalHeaderRow}>
-              <View>
-                <Text style={styles.modalHeadingTitle}>Start New Session</Text>
-                <Text style={styles.modalHeadingSub}>
-                  Coaching context for {targetName} ({genderLabel})
-                </Text>
-              </View>
-              <TouchableOpacity
-                style={styles.modalCloseBtn}
-                onPress={() => {
-                  setShowNewSessionModal(false);
-                  setModalMode('picker');
-                }}
-                activeOpacity={0.7}
-              >
-                <Feather name="x" size={20} color={Palette.zinc700} />
-              </TouchableOpacity>
-            </View>
-
-            {modalMode === 'picker' ? (
-              <View style={styles.modalOptionsContainer}>
-                {/* Option 1: Upload Screenshot */}
-                <TouchableOpacity
-                  style={styles.modalOptionCard}
-                  onPress={handleUploadScreenshot}
-                  activeOpacity={0.85}
-                >
-                  <View style={[styles.optionIconBox, { backgroundColor: '#eff6ff' }]}>
-                    <Feather name="image" size={22} color={Palette.indigo600} />
-                  </View>
-                  <View style={styles.optionTextBox}>
-                    <Text style={styles.optionTitle}>Upload Chat Screenshot</Text>
-                    <Text style={styles.optionDescription}>
-                      AI scans the conversation & creates this session on top
-                    </Text>
-                  </View>
-                  <Feather name="chevron-right" size={20} color={Palette.zinc400} />
-                </TouchableOpacity>
-
-                {/* Option 2: Paste Chat Text */}
-                <TouchableOpacity
-                  style={styles.modalOptionCard}
-                  onPress={() => setModalMode('paste')}
-                  activeOpacity={0.85}
-                >
-                  <View style={[styles.optionIconBox, { backgroundColor: '#fdf2f8' }]}>
-                    <Feather name="clipboard" size={22} color="#db2777" />
-                  </View>
-                  <View style={styles.optionTextBox}>
-                    <Text style={styles.optionTitle}>Paste Chat Text</Text>
-                    <Text style={styles.optionDescription}>
-                      Paste what {targetName} sent you from WhatsApp or Tinder
-                    </Text>
-                  </View>
-                  <Feather name="chevron-right" size={20} color={Palette.zinc400} />
-                </TouchableOpacity>
-
-                {/* Option 3: Type in Chat Directly */}
-                <TouchableOpacity
-                  style={styles.modalOptionCard}
-                  onPress={handleTypeInChat}
-                  activeOpacity={0.85}
-                >
-                  <View style={[styles.optionIconBox, { backgroundColor: Palette.zinc100 }]}>
-                    <Feather name="message-square" size={22} color={Palette.zinc900} />
-                  </View>
-                  <View style={styles.optionTextBox}>
-                    <Text style={styles.optionTitle}>Type in Chat Directly</Text>
-                    <Text style={styles.optionDescription}>
-                      Jump into full Chat Studio & consult Vibely AI
-                    </Text>
-                  </View>
-                  <Feather name="chevron-right" size={20} color={Palette.zinc400} />
-                </TouchableOpacity>
-              </View>
-            ) : (
-              /* Paste Input View */
-              <View style={styles.pasteSectionInModal}>
-                <View style={styles.pasteHeaderRow}>
-                  <Text style={styles.pasteInputLabel}>What did {targetName} say?</Text>
-                  <TouchableOpacity
-                    style={styles.pasteFromClipBtn}
-                    onPress={handlePasteFromClipboard}
-                    activeOpacity={0.7}
-                  >
-                    <Feather name="clipboard" size={12} color={Palette.indigo600} />
-                    <Text style={styles.pasteFromClipText}>Paste Clipboard</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <TextInput
-                  style={styles.pasteInputArea}
-                  value={pasteText}
-                  onChangeText={setPasteText}
-                  placeholder={`e.g. Probably just staying home lol`}
-                  placeholderTextColor={Palette.zinc400}
-                  multiline
-                  autoFocus
-                />
-
-                <View style={styles.pasteModalActions}>
-                  <TouchableOpacity
-                    style={styles.backToPickerBtn}
-                    onPress={() => setModalMode('picker')}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.backToPickerText}>Back</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.createFromPasteBtn,
-                      pasteText.trim().length === 0 && { opacity: 0.5 },
-                    ]}
-                    onPress={handlePasteSubmit}
-                    disabled={pasteText.trim().length === 0}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.createFromPasteBtnText}>Create & Show on Top</Text>
-                    <Feather name="check" size={14} color="#ffffff" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
-          </View>
-        </View>
-      </Modal>
     </ScrollView>
   );
 };

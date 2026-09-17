@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,8 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
+  BackHandler,
+  Animated,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
@@ -54,6 +56,49 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
   const [branchScenarios, setBranchScenarios] = useState<DialogTreeNodeModel[]>([]);
 
   const scrollViewRef = useRef<ScrollView>(null);
+  const isInitialScrollDone = useRef(false);
+  const thinkingPulseAnim = useRef(new Animated.Value(1)).current;
+
+  // Reset initial scroll status on component mount or activeProfile change
+  useEffect(() => {
+    isInitialScrollDone.current = false;
+  }, [activeProfile.id]);
+
+  useEffect(() => {
+    if (isAiThinking) {
+      const loop = Animated.loop(
+        Animated.sequence([
+          Animated.timing(thinkingPulseAnim, { toValue: 1.03, duration: 600, useNativeDriver: true }),
+          Animated.timing(thinkingPulseAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
+        ])
+      );
+      loop.start();
+      return () => loop.stop();
+    }
+  }, [isAiThinking, thinkingPulseAnim]);
+
+  // Handle Android Back Gesture / Button
+  useEffect(() => {
+    const onBackPress = () => {
+      if (showPasteModal) {
+        setShowPasteModal(false);
+        return true;
+      }
+      if (showPlusMenu) {
+        setShowPlusMenu(false);
+        return true;
+      }
+      if (branchingReply) {
+        setBranchingReply(null);
+        return true;
+      }
+      onBack();
+      return true;
+    };
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => subscription.remove();
+  }, [showPasteModal, showPlusMenu, branchingReply, onBack]);
 
   // Toggle Target Gender (Her -> Him -> Them)
   const handleToggleGender = () => {
@@ -225,8 +270,8 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
     >
       {/* 1. AI WINGMAN COACH HEADER */}
       <View style={styles.chatNavHeader}>
@@ -278,7 +323,13 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
         ref={scrollViewRef}
         style={styles.chatScroll}
         contentContainerStyle={styles.chatContent}
-        onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
+        keyboardShouldPersistTaps="handled"
+        onContentSizeChange={() => {
+          if (!isInitialScrollDone.current) {
+            scrollViewRef.current?.scrollToEnd({ animated: false });
+            isInitialScrollDone.current = true;
+          }
+        }}
       >
         <View style={styles.dateStampContainer}>
           <View style={styles.dateStampBadge}>
@@ -298,18 +349,22 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
               key={m.id}
               style={[styles.messageRow, isYou ? styles.rowYou : styles.rowAi]}
             >
-              {isAi && (
-                <View style={styles.aiAvatarBox}>
-                  <Feather name="zap" size={13} color="#ffffff" />
-                </View>
-              )}
-
               <View
                 style={[
                   styles.chatBubble,
                   isYou ? styles.bubbleYou : styles.bubbleAi,
                 ]}
               >
+                {/* AI Header with Icon inside bubble */}
+                {isAi && (
+                  <View style={styles.aiBubbleHeader}>
+                    <View style={styles.aiAvatarBox}>
+                      <Feather name="zap" size={12} color="#ffffff" />
+                    </View>
+                    <Text style={styles.aiBubbleHeaderTitle}>Vibely AI Wingman</Text>
+                  </View>
+                )}
+
                 {/* 1. Scene Analysis / Subtext Context (if provided by AI) */}
                 {m.sceneContext && (
                   <View style={styles.sceneContextCard}>
@@ -412,16 +467,21 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
 
         {/* AI Thinking Indicator */}
         {isAiThinking && (
-          <View style={[styles.messageRow, styles.rowAi]}>
-            <View style={styles.aiAvatarBox}>
-              <Feather name="zap" size={13} color="#ffffff" />
+          <Animated.View style={[{ transform: [{ scale: thinkingPulseAnim }] }]}>
+            <View style={[styles.messageRow, styles.rowAi]}>
+              <View style={[styles.chatBubble, styles.bubbleAi, styles.thinkingBubble]}>
+                <View style={styles.aiBubbleHeader}>
+                  <View style={styles.aiAvatarBox}>
+                    <Feather name="zap" size={12} color="#ffffff" />
+                  </View>
+                  <Text style={styles.aiBubbleHeaderTitle}>Vibely AI Wingman</Text>
+                </View>
+                <Text style={styles.thinkingText}>
+                  Vibely AI is decoding {activeProfile.name}'s signals & crafting 3 {selectedGenre} options...
+                </Text>
+              </View>
             </View>
-            <View style={[styles.chatBubble, styles.bubbleAi, styles.thinkingBubble]}>
-              <Text style={styles.thinkingText}>
-                Vibely AI is decoding {activeProfile.name}'s signals & crafting 3 {selectedGenre} options...
-              </Text>
-            </View>
-          </View>
+          </Animated.View>
         )}
       </ScrollView>
 
@@ -513,6 +573,9 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
           placeholderTextColor={Palette.zinc400}
           onSubmitEditing={handleSendMessage}
           returnKeyType="send"
+          onFocus={() => {
+            setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+          }}
         />
 
         {/* Send Button */}
@@ -610,29 +673,42 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
 
       {/* PASTE DIALOGUE MODAL */}
       <Modal visible={showPasteModal} animationType="slide" transparent>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.pasteModalCard}>
-            <View style={styles.pasteModalHeader}>
-              <Text style={styles.pasteModalTitle}>Paste {activeProfile.name}'s Message</Text>
-              <TouchableOpacity onPress={() => setShowPasteModal(false)}>
-                <Feather name="x" size={20} color={Palette.zinc700} />
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <TouchableOpacity
+            style={styles.modalBackdrop}
+            activeOpacity={1}
+            onPress={() => setShowPasteModal(false)}
+          >
+            <TouchableOpacity
+              activeOpacity={1}
+              style={styles.pasteModalCard}
+              onPress={(e) => e.stopPropagation()}
+            >
+              <View style={styles.pasteModalHeader}>
+                <Text style={styles.pasteModalTitle}>Paste {activeProfile.name}'s Message</Text>
+                <TouchableOpacity onPress={() => setShowPasteModal(false)}>
+                  <Feather name="x" size={20} color={Palette.zinc700} />
+                </TouchableOpacity>
+              </View>
+
+              <TextInput
+                style={styles.pasteTextArea}
+                value={pasteInputText}
+                onChangeText={setPasteInputText}
+                multiline
+                placeholder="e.g. Probably just staying home lol"
+                placeholderTextColor={Palette.zinc400}
+              />
+
+              <TouchableOpacity style={styles.importBtn} onPress={handlePasteSubmit} activeOpacity={0.85}>
+                <Text style={styles.importBtnText}>Analyze with AI Wingman</Text>
               </TouchableOpacity>
-            </View>
-
-            <TextInput
-              style={styles.pasteTextArea}
-              value={pasteInputText}
-              onChangeText={setPasteInputText}
-              multiline
-              placeholder="e.g. Probably just staying home lol"
-              placeholderTextColor={Palette.zinc400}
-            />
-
-            <TouchableOpacity style={styles.importBtn} onPress={handlePasteSubmit} activeOpacity={0.85}>
-              <Text style={styles.importBtnText}>Analyze with AI Wingman</Text>
             </TouchableOpacity>
-          </View>
-        </View>
+          </TouchableOpacity>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* BRANCHING SCENARIO MODAL */}
@@ -803,16 +879,29 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
   },
   aiAvatarBox: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     backgroundColor: Palette.zinc900,
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 2,
+  },
+  aiBubbleHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    marginBottom: 8,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  aiBubbleHeaderTitle: {
+    fontSize: 11.5,
+    fontWeight: '800',
+    color: Palette.zinc900,
+    letterSpacing: -0.1,
   },
   chatBubble: {
-    maxWidth: '85%',
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderRadius: 16,
@@ -820,12 +909,19 @@ const styles = StyleSheet.create({
   bubbleYou: {
     backgroundColor: Palette.zinc900,
     borderBottomRightRadius: 4,
+    maxWidth: '85%',
   },
   bubbleAi: {
     backgroundColor: '#ffffff',
+    borderRadius: 18,
+    borderTopLeftRadius: 18,
     borderBottomLeftRadius: 4,
+    maxWidth: '96%',
+    width: '96%',
     borderWidth: 1,
     borderColor: '#e2e8f0',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     ...ThemeShadows.sm,
   },
   bubbleMessageText: {

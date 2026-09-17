@@ -9,9 +9,14 @@ import {
   Switch,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Palette, ThemeColors } from '../../theme/colors';
 import { ThemeShadows } from '../../theme/shadows';
-import { TargetProfileModel, UserSubscriptionModel, ConversationModel } from '../../domain/index';
+import { ConversationModel } from '../../domain/index';
+import { useApp } from '../../context/AppContext';
+import { authClient } from '../../lib/authClient';
+import type { RootStackParamList } from '../../navigation/types';
 
 export interface WingmanNotification {
   id: string;
@@ -23,27 +28,18 @@ export interface WingmanNotification {
   isUnread: boolean;
 }
 
-interface TopBarProps {
-  activeProfile: TargetProfileModel;
-  profiles: TargetProfileModel[];
-  subscription: UserSubscriptionModel;
-  conversations?: ConversationModel[];
-  onSelectProfile: (profile: TargetProfileModel) => void;
-  onOpenPro: () => void;
-  onLogout?: () => void;
-  onOpenConversation?: (conv: ConversationModel) => void;
-}
+export const TopBar: React.FC = () => {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const { activeProfile, profiles, subscription, conversations, selectProfile, loadConversation } = useApp();
 
-export const TopBar: React.FC<TopBarProps> = ({
-  activeProfile,
-  profiles,
-  subscription,
-  conversations = [],
-  onSelectProfile,
-  onOpenPro,
-  onLogout,
-  onOpenConversation,
-}) => {
+  const onSelectProfile = selectProfile;
+  const onOpenPro = () => navigation.navigate('Main', { screen: 'Pro' });
+  const onLogout = () => authClient.signOut();
+  const onOpenConversation = (conv: ConversationModel) => {
+    loadConversation(conv);
+    navigation.navigate('Studio', undefined);
+  };
+
   // Modal States
   const [showProfileSwitcher, setShowProfileSwitcher] = useState(false);
   const [showUserProfileModal, setShowUserProfileModal] = useState(false);

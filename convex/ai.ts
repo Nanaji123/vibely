@@ -1,5 +1,11 @@
+"use node";
+
 import { action } from "./_generated/server";
 import { v } from "convex/values";
+import OpenAI from "openai";
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const MODEL = "gpt-4o-mini";
 
 export const generateReplies = action({
   args: {
@@ -17,40 +23,36 @@ export const generateReplies = action({
     intent: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    // Convex action handler format for AI reply generation
-    const { lastMessage, desiredVibe, relationship, targetName } = args;
+    const { lastMessage, desiredVibe, relationship, targetName, personalityTraits, conversationHistory } = args;
 
-    // Structured responses grouped by tone
-    const responses = [
-      {
-        category: "Playful",
-        replyText: `Ah yes, professional couch potato mode activated 😂 What's the main event, scrolling or napping?`,
-        explanation: "Playful banter that keeps things light without pressuring them.",
-      },
-      {
-        category: "Flirty",
-        replyText: `Staying home? Sounds like you need better plans 😏 I might know a spot...`,
-        explanation: "Bold & confident flirtation hinting at a meetup.",
-      },
-      {
-        category: "Romantic",
-        replyText: `Maybe staying home wouldn't be so boring with the right company ❤️`,
-        explanation: "Warm and direct affection to test romantic interest.",
-      },
-      {
-        category: "Funny",
-        replyText: `Respect. Your weekend itinerary: bed → fridge → bed 😂`,
-        explanation: "Relatable self-deprecating humor.",
-      },
-      {
-        category: "Confident",
-        replyText: `Not on my watch. Let's get food this weekend, my treat 😎`,
-        explanation: "Decisive action taking charge of the plans.",
-      },
-    ];
+    const historyText = conversationHistory
+      .slice(-8)
+      .map((m) => `${m.sender}: ${m.text}`)
+      .join("\n");
+
+    const completion = await openai.chat.completions.create({
+      model: MODEL,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a witty, emotionally intelligent texting/dating coach. Given the conversation so far, break down what the target's message signals (sceneContext), give a one-sentence coaching lead-in (advice), then generate 5 distinct reply options the user could send next, one for each category: Playful, Flirty, Romantic, Funny, Confident. Each reply must fit the requested vibe/relationship and never sound robotic. Respond ONLY with JSON matching: " +
+            '{"sceneContext":string,"advice":string,"responses":[{"category":"Playful"|"Flirty"|"Romantic"|"Funny"|"Confident","replyText":string,"explanation":string}]} (exactly 5 responses).',
+        },
+        {
+          role: "user",
+          content: `Target: ${targetName} (${relationship}). Their personality: ${personalityTraits.join(", ") || "unknown"}. Desired vibe: ${desiredVibe}.\nRecent conversation:\n${historyText}\nTheir most recent message: "${lastMessage}"\n\nGenerate the breakdown and 5 reply options now.`,
+        },
+      ],
+    });
+
+    const parsed = JSON.parse(completion.choices[0].message.content ?? "{}");
 
     return {
-      responses,
+      sceneContext: parsed.sceneContext ?? "",
+      advice: parsed.advice ?? `Here are a few ${desiredVibe} ways you can reply to ${targetName}:`,
+      responses: parsed.responses ?? [],
       vibe: desiredVibe,
       targetName,
       relationship,
@@ -70,15 +72,39 @@ export const analyzeConversationPulse = action({
     targetName: v.string(),
   },
   handler: async (ctx, args) => {
+    const transcript = args.messages
+      .slice(-20)
+      .map((m) => `${m.sender}: ${m.text}`)
+      .join("\n");
+
+    const completion = await openai.chat.completions.create({
+      model: MODEL,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a dating/texting chemistry analyst. Read the transcript and score it. Respond ONLY with JSON matching: " +
+            '{"interestScore":0-100,"playfulnessScore":0-100,"romanceScore":0-100,"effortRatio":0-100,"currentVibeSummary":string,"observation":string,"suggestion":string,"subtext":string}. effortRatio is the percentage of conversational effort coming from the user (the "you" sender) vs the target.',
+        },
+        {
+          role: "user",
+          content: `Target name: ${args.targetName}.\nTranscript:\n${transcript}\n\nAnalyze this conversation now.`,
+        },
+      ],
+    });
+
+    const parsed = JSON.parse(completion.choices[0].message.content ?? "{}");
+
     return {
-      interestScore: 78,
-      playfulnessScore: 88,
-      romanceScore: 52,
-      effortRatio: 71,
-      currentVibeSummary: "Playful + comfortable",
-      observation: "You're asking most of the questions right now.",
-      suggestion: "Stop interviewing them! Share a funny story about your day or tease them.",
-      subtext: "They are enjoying the conversation, but waiting for you to lead into something exciting.",
+      interestScore: parsed.interestScore ?? 50,
+      playfulnessScore: parsed.playfulnessScore ?? 50,
+      romanceScore: parsed.romanceScore ?? 50,
+      effortRatio: parsed.effortRatio ?? 50,
+      currentVibeSummary: parsed.currentVibeSummary ?? "Neutral",
+      observation: parsed.observation ?? "",
+      suggestion: parsed.suggestion ?? "",
+      subtext: parsed.subtext ?? "",
     };
   },
 });

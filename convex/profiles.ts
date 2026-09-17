@@ -1,12 +1,14 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { authComponent } from "./auth";
 
 export const listProfiles = query({
-  args: { userId: v.string() },
-  handler: async (ctx, args) => {
+  args: {},
+  handler: async (ctx) => {
+    const user = await authComponent.getAuthUser(ctx);
     return await ctx.db
       .query("profiles")
-      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .withIndex("by_userId", (q) => q.eq("userId", user._id))
       .order("desc")
       .collect();
   },
@@ -14,8 +16,8 @@ export const listProfiles = query({
 
 export const saveProfile = mutation({
   args: {
-    userId: v.string(),
     name: v.string(),
+    gender: v.union(v.literal("female"), v.literal("male"), v.literal("other")),
     relationship: v.string(),
     personalityTraits: v.array(v.string()),
     likes: v.array(v.string()),
@@ -24,9 +26,11 @@ export const saveProfile = mutation({
     avatarEmoji: v.string(),
   },
   handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
     const now = new Date().toISOString();
     return await ctx.db.insert("profiles", {
       ...args,
+      userId: user._id,
       createdAt: now,
       updatedAt: now,
     });
@@ -37,6 +41,7 @@ export const updateProfile = mutation({
   args: {
     id: v.id("profiles"),
     name: v.string(),
+    gender: v.union(v.literal("female"), v.literal("male"), v.literal("other")),
     relationship: v.string(),
     personalityTraits: v.array(v.string()),
     likes: v.array(v.string()),
@@ -45,11 +50,15 @@ export const updateProfile = mutation({
     avatarEmoji: v.string(),
   },
   handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
     const { id, ...data } = args;
-    const now = new Date().toISOString();
+    const existing = await ctx.db.get(id);
+    if (!existing || existing.userId !== user._id) {
+      throw new Error("Profile not found");
+    }
     await ctx.db.patch(id, {
       ...data,
-      updatedAt: now,
+      updatedAt: new Date().toISOString(),
     });
   },
 });
@@ -57,6 +66,11 @@ export const updateProfile = mutation({
 export const deleteProfile = mutation({
   args: { id: v.id("profiles") },
   handler: async (ctx, args) => {
+    const user = await authComponent.getAuthUser(ctx);
+    const existing = await ctx.db.get(args.id);
+    if (!existing || existing.userId !== user._id) {
+      throw new Error("Profile not found");
+    }
     await ctx.db.delete(args.id);
   },
 });

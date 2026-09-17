@@ -1,15 +1,23 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Modal } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import { Palette, ThemeColors } from '../theme/colors';
+import { Palette } from '../theme/colors';
 import { ThemeShadows } from '../theme/shadows';
+import { authClient } from '../lib/authClient';
 
-interface AuthScreenProps {
-  onSignInSuccess: () => void;
-}
+export const AuthScreen: React.FC = () => {
+  const [signingIn, setSigningIn] = useState(false);
 
-export const AuthScreen: React.FC<AuthScreenProps> = ({ onSignInSuccess }) => {
-  const [showConfigModal, setShowConfigModal] = useState(false);
+  const handleGoogleSignIn = async () => {
+    setSigningIn(true);
+    try {
+      await authClient.signIn.social({ provider: 'google', callbackURL: 'vibely://' });
+    } catch (err) {
+      Alert.alert('Sign-in failed', err instanceof Error ? err.message : 'Please try again.');
+    } finally {
+      setSigningIn(false);
+    }
+  };
 
   return (
     <View style={styles.container}>
@@ -26,58 +34,24 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onSignInSuccess }) => {
 
       {/* Auth Actions */}
       <View style={styles.actionsBox}>
-        {/* Google Sign-In Button */}
         <TouchableOpacity
           style={styles.googleBtn}
-          onPress={() => setShowConfigModal(true)}
+          onPress={handleGoogleSignIn}
           activeOpacity={0.85}
+          disabled={signingIn}
         >
-          <View style={styles.googleIconCircle}>
-            <Text style={styles.googleIcon}>G</Text>
-          </View>
-          <Text style={styles.googleBtnText}>Continue with Google</Text>
-        </TouchableOpacity>
-
-        {/* Demo Fast Login */}
-        <TouchableOpacity
-          style={styles.demoBtn}
-          onPress={onSignInSuccess}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.demoBtnText}>Instant Demo Access →</Text>
+          {signingIn ? (
+            <ActivityIndicator size="small" color={Palette.zinc900} />
+          ) : (
+            <>
+              <View style={styles.googleIconCircle}>
+                <Text style={styles.googleIcon}>G</Text>
+              </View>
+              <Text style={styles.googleBtnText}>Continue with Google</Text>
+            </>
+          )}
         </TouchableOpacity>
       </View>
-
-      {/* Google Services Config Modal Prompt */}
-      <Modal visible={showConfigModal} animationType="fade" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.configModalCard}>
-            <Feather name="settings" size={32} color={Palette.indigo600} style={{ marginBottom: 12 }} />
-            <Text style={styles.configModalTitle}>Google OAuth Setup</Text>
-            <Text style={styles.configModalDesc}>
-              To connect your real Google credentials, provide your{' '}
-              <Text style={styles.highlightText}>google-services.json</Text> file or Client ID.
-            </Text>
-
-            <TouchableOpacity
-              style={styles.continueDemoBtn}
-              onPress={() => {
-                setShowConfigModal(false);
-                onSignInSuccess();
-              }}
-            >
-              <Text style={styles.continueDemoText}>Continue with Demo Account →</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.cancelConfigBtn}
-              onPress={() => setShowConfigModal(false)}
-            >
-              <Text style={styles.cancelConfigText}>Close</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 };
@@ -149,68 +123,5 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: Palette.zinc900,
-  },
-  demoBtn: {
-    backgroundColor: Palette.zinc100,
-    paddingVertical: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  demoBtnText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: Palette.zinc800,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(9, 9, 11, 0.5)',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  configModalCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 24,
-    alignItems: 'center',
-    ...ThemeShadows.md,
-  },
-  configModalTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: Palette.zinc900,
-    marginBottom: 6,
-  },
-  configModalDesc: {
-    fontSize: 13,
-    color: Palette.zinc500,
-    textAlign: 'center',
-    lineHeight: 18,
-    marginBottom: 18,
-  },
-  highlightText: {
-    fontWeight: '800',
-    color: Palette.indigo600,
-  },
-  continueDemoBtn: {
-    backgroundColor: Palette.zinc900,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    marginBottom: 8,
-    width: '100%',
-    alignItems: 'center',
-  },
-  continueDemoText: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#ffffff',
-  },
-  cancelConfigBtn: {
-    paddingVertical: 4,
-  },
-  cancelConfigText: {
-    fontSize: 12,
-    color: Palette.zinc400,
-    fontWeight: '600',
   },
 });

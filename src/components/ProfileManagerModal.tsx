@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Modal, View, Text, TouchableOpacity, ScrollView, StyleSheet, TextInput } from 'react-native';
+import { Modal, View, Text, TouchableOpacity, ScrollView, StyleSheet, TextInput, Platform, KeyboardAvoidingView } from 'react-native';
 import { COLORS, SPACING, RADIUS, SHADOWS } from '../constants/theme';
 import { TargetProfile } from '../types';
 
@@ -47,21 +47,25 @@ export const ProfileManagerModal: React.FC<ProfileManagerModalProps> = ({
 
   return (
     <Modal visible={visible} animationType="fade" transparent>
-      <View style={styles.overlay}>
-        <View style={styles.modalCard}>
-          {/* Header */}
-          <View style={styles.header}>
-            <View style={styles.titleRow}>
-              <Text style={styles.icon}>🎭</Text>
-              <View>
-                <Text style={styles.title}>Personality Memory</Text>
-                <Text style={styles.subtitle}>Profiles auto-inject context into AI replies</Text>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <View style={styles.overlay}>
+          <View style={styles.modalCard}>
+            {/* Header */}
+            <View style={styles.header}>
+              <View style={styles.titleRow}>
+                <Text style={styles.icon}>🎭</Text>
+                <View>
+                  <Text style={styles.title}>Personality Memory</Text>
+                  <Text style={styles.subtitle}>Profiles auto-inject context into AI replies</Text>
+                </View>
               </View>
+              <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
+                <Text style={styles.closeBtnText}>✕</Text>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-              <Text style={styles.closeBtnText}>✕</Text>
-            </TouchableOpacity>
-          </View>
 
           <ScrollView style={styles.bodyScroll} contentContainerStyle={styles.bodyContent}>
             {!isCreating ? (
@@ -176,7 +180,8 @@ export const ProfileManagerModal: React.FC<ProfileManagerModalProps> = ({
           </ScrollView>
         </View>
       </View>
-    </Modal>
+    </KeyboardAvoidingView>
+  </Modal>
   );
 };
 

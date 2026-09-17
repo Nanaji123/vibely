@@ -9,6 +9,8 @@ import {
   StyleSheet,
   ActivityIndicator,
   Image,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { COLORS, SPACING, RADIUS, SHADOWS } from '../constants/theme';
@@ -142,7 +144,11 @@ export const ChatInputModal: React.FC<ChatInputModalProps> = ({
 
   return (
     <Modal visible={visible} animationType="slide" transparent>
-      <View style={styles.overlay}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <View style={styles.overlay}>
         <View style={styles.modalCard}>
           {/* Header */}
           <View style={styles.header}>
@@ -288,7 +294,8 @@ export const ChatInputModal: React.FC<ChatInputModalProps> = ({
             </TouchableOpacity>
           </View>
         </View>
-      </View>
+        </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 };

@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Animated } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { Palette, ThemeColors } from '../theme/colors';
 import { ThemeShadows } from '../theme/shadows';
@@ -15,6 +15,35 @@ export const PaywallScreen: React.FC<PaywallScreenProps> = ({
   onUpgrade,
 }) => {
   const [selectedPlan, setSelectedPlan] = useState<'plus' | 'pro'>('plus');
+  const entranceAnim = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.timing(entranceAnim, {
+      toValue: 1,
+      duration: 350,
+      useNativeDriver: true,
+    }).start();
+
+    // Subtle pulsing for CTA
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1.02,
+          duration: 900,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 900,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    pulse.start();
+
+    return () => pulse.stop();
+  }, [entranceAnim, pulseAnim]);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -88,15 +117,17 @@ export const PaywallScreen: React.FC<PaywallScreenProps> = ({
       </View>
 
       {/* CTA Button */}
-      <TouchableOpacity
-        style={styles.subscribeBtn}
-        onPress={() => onUpgrade(selectedPlan)}
-        activeOpacity={0.88}
-      >
-        <Text style={styles.subscribeBtnText}>
-          Upgrade to {selectedPlan.toUpperCase()}
-        </Text>
-      </TouchableOpacity>
+      <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+        <TouchableOpacity
+          style={styles.subscribeBtn}
+          onPress={() => onUpgrade(selectedPlan)}
+          activeOpacity={0.88}
+        >
+          <Text style={styles.subscribeBtnText}>
+            Upgrade to {selectedPlan.toUpperCase()}
+          </Text>
+        </TouchableOpacity>
+      </Animated.View>
 
       <Text style={styles.guaranteeText}>Cancel anytime. 7-day refund guarantee.</Text>
     </ScrollView>

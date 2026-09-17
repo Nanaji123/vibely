@@ -13,4 +13,11 @@ export const ThemeShadows = {
     shadowRadius: 10,
     elevation: 3,
   },
+  lg: {
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.12,
+    shadowRadius: 24,
+    elevation: 6,
+  },
 };

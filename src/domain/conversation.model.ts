@@ -30,6 +30,7 @@ export interface PulseAnalysisModel {
 
 export interface ConversationModel {
   id: string;
+  profileId?: string;
   title: string;
   targetName: string;
   relationship: string;

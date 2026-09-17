@@ -4,20 +4,33 @@ import { v } from "convex/values";
 export default defineSchema({
   conversations: defineTable({
     userId: v.string(),
+    profileId: v.optional(v.string()),
     title: v.string(),
     targetName: v.string(),
     relationship: v.string(),
     personalityTraits: v.array(v.string()),
     messages: v.array(
       v.object({
-        sender: v.union(v.literal("you"), v.literal("them")),
+        id: v.string(),
+        sender: v.union(v.literal("you"), v.literal("ai"), v.literal("them")),
         text: v.string(),
+        sceneContext: v.optional(v.string()),
+        suggestions: v.optional(
+          v.array(
+            v.object({
+              id: v.string(),
+              category: v.string(),
+              replyText: v.string(),
+              toneVariant: v.string(),
+            })
+          )
+        ),
+        selectedSuggestionId: v.optional(v.string()),
         timestamp: v.optional(v.string()),
       })
     ),
-    lastMessage: v.string(),
     currentVibe: v.string(),
-    pulseScore: v.number(),
+    pulseScore: v.optional(v.number()),
     analysis: v.optional(
       v.object({
         interestScore: v.number(),
@@ -37,6 +50,7 @@ export default defineSchema({
   profiles: defineTable({
     userId: v.string(),
     name: v.string(),
+    gender: v.union(v.literal("female"), v.literal("male"), v.literal("other")),
     relationship: v.string(),
     personalityTraits: v.array(v.string()),
     likes: v.array(v.string()),
@@ -68,6 +82,7 @@ export default defineSchema({
     userId: v.string(),
     plan: v.union(v.literal("free"), v.literal("plus"), v.literal("pro")),
     creditsRemaining: v.number(),
-    renewDate: v.string(),
+    unlimited: v.boolean(),
+    updatedAt: v.string(),
   }).index("by_userId", ["userId"]),
 });
