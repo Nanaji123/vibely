@@ -1,5 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Animated } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
 import { Palette, ThemeColors } from '../theme/colors';
 import { ThemeShadows } from '../theme/shadows';
@@ -15,38 +22,23 @@ export const PaywallScreen: React.FC<PaywallScreenProps> = ({
   onUpgrade,
 }) => {
   const [selectedPlan, setSelectedPlan] = useState<'plus' | 'pro'>('plus');
-  const entranceAnim = useRef(new Animated.Value(0)).current;
-  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const entranceAnim = useSharedValue(0);
+  const pulseAnim = useSharedValue(1);
 
   useEffect(() => {
-    Animated.timing(entranceAnim, {
-      toValue: 1,
-      duration: 350,
-      useNativeDriver: true,
-    }).start();
-
-    // Subtle pulsing for CTA
-    const pulse = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, {
-          toValue: 1.02,
-          duration: 900,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulseAnim, {
-          toValue: 1,
-          duration: 900,
-          useNativeDriver: true,
-        }),
-      ])
+    entranceAnim.value = withTiming(1, { duration: 350 });
+    pulseAnim.value = withRepeat(
+      withSequence(withTiming(1.02, { duration: 900 }), withTiming(1, { duration: 900 })),
+      -1
     );
-    pulse.start();
+  }, []);
 
-    return () => pulse.stop();
-  }, [entranceAnim, pulseAnim]);
+  const entranceStyle = useAnimatedStyle(() => ({ opacity: entranceAnim.value }));
+  const pulseStyle = useAnimatedStyle(() => ({ transform: [{ scale: pulseAnim.value }] }));
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <Animated.View style={entranceStyle}>
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.badge}>
@@ -117,7 +109,7 @@ export const PaywallScreen: React.FC<PaywallScreenProps> = ({
       </View>
 
       {/* CTA Button */}
-      <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+      <Animated.View style={pulseStyle}>
         <TouchableOpacity
           style={styles.subscribeBtn}
           onPress={() => onUpgrade(selectedPlan)}
@@ -130,6 +122,7 @@ export const PaywallScreen: React.FC<PaywallScreenProps> = ({
       </Animated.View>
 
       <Text style={styles.guaranteeText}>Cancel anytime. 7-day refund guarantee.</Text>
+      </Animated.View>
     </ScrollView>
   );
 };

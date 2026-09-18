@@ -10,8 +10,14 @@ import {
   KeyboardAvoidingView,
   Platform,
   BackHandler,
-  Animated,
 } from 'react-native';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
@@ -57,7 +63,7 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
 
   const scrollViewRef = useRef<ScrollView>(null);
   const isInitialScrollDone = useRef(false);
-  const thinkingPulseAnim = useRef(new Animated.Value(1)).current;
+  const thinkingPulseAnim = useSharedValue(1);
 
   // Reset initial scroll status on component mount or activeProfile change
   useEffect(() => {
@@ -66,16 +72,21 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
 
   useEffect(() => {
     if (isAiThinking) {
-      const loop = Animated.loop(
-        Animated.sequence([
-          Animated.timing(thinkingPulseAnim, { toValue: 1.03, duration: 600, useNativeDriver: true }),
-          Animated.timing(thinkingPulseAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
-        ])
+      thinkingPulseAnim.value = withRepeat(
+        withSequence(
+          withTiming(1.03, { duration: 600 }),
+          withTiming(1, { duration: 600 })
+        ),
+        -1
       );
-      loop.start();
-      return () => loop.stop();
+    } else {
+      thinkingPulseAnim.value = withTiming(1, { duration: 200 });
     }
-  }, [isAiThinking, thinkingPulseAnim]);
+  }, [isAiThinking]);
+
+  const thinkingPulseStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: thinkingPulseAnim.value }],
+  }));
 
   // Handle Android Back Gesture / Button
   useEffect(() => {
@@ -467,7 +478,7 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
 
         {/* AI Thinking Indicator */}
         {isAiThinking && (
-          <Animated.View style={[{ transform: [{ scale: thinkingPulseAnim }] }]}>
+          <Animated.View style={thinkingPulseStyle}>
             <View style={[styles.messageRow, styles.rowAi]}>
               <View style={[styles.chatBubble, styles.bubbleAi, styles.thinkingBubble]}>
                 <View style={styles.aiBubbleHeader}>

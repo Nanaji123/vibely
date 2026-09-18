@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Animated } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
+import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
 import { Palette, ThemeColors } from '../theme/colors';
 import { ThemeShadows } from '../theme/shadows';
@@ -15,15 +16,16 @@ export const PulseAnalysisScreen: React.FC<PulseAnalysisScreenProps> = ({
   conversation,
 }) => {
   const [refreshing, setRefreshing] = useState(false);
-  const scoreAnim = useRef(new Animated.Value(0)).current;
+  const scoreAnim = useSharedValue(0);
 
   useEffect(() => {
-    Animated.timing(scoreAnim, {
-      toValue: 1,
-      duration: 650,
-      useNativeDriver: true,
-    }).start();
-  }, [scoreAnim]);
+    scoreAnim.value = withTiming(1, { duration: 650 });
+  }, []);
+
+  const scoreAnimStyle = useAnimatedStyle(() => ({
+    opacity: scoreAnim.value,
+    transform: [{ translateY: (1 - scoreAnim.value) * 16 }],
+  }));
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -61,19 +63,7 @@ export const PulseAnalysisScreen: React.FC<PulseAnalysisScreenProps> = ({
         />
       }
     >
-      <Animated.View
-        style={{
-          opacity: scoreAnim,
-          transform: [
-            {
-              translateY: scoreAnim.interpolate({
-                inputRange: [0, 1],
-                outputRange: [16, 0],
-              }),
-            },
-          ],
-        }}
-      >
+      <Animated.View style={scoreAnimStyle}>
       {/* 1. HERO SENTIMENT PULSE BANNER */}
       <View style={styles.heroCard}>
         <View style={styles.heroBadgeRow}>

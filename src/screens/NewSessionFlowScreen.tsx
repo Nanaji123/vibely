@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,9 +9,9 @@ import {
   Image,
   Platform,
   BackHandler,
-  Animated,
   ActivityIndicator,
 } from 'react-native';
+import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
@@ -45,29 +45,20 @@ export const NewSessionFlowScreen: React.FC<NewSessionFlowScreenProps> = ({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // Entrance animation for steps
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(14)).current;
-
-  const triggerAnimation = () => {
-    fadeAnim.setValue(0);
-    slideAnim.setValue(14);
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 280,
-        useNativeDriver: true,
-      }),
-      Animated.timing(slideAnim, {
-        toValue: 0,
-        duration: 280,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  };
+  const fadeAnim = useSharedValue(0);
+  const slideAnim = useSharedValue(14);
 
   useEffect(() => {
-    triggerAnimation();
+    fadeAnim.value = 0;
+    slideAnim.value = 14;
+    fadeAnim.value = withTiming(1, { duration: 280 });
+    slideAnim.value = withTiming(0, { duration: 280 });
   }, [step]);
+
+  const stepAnimStyle = useAnimatedStyle(() => ({
+    opacity: fadeAnim.value,
+    transform: [{ translateY: slideAnim.value }],
+  }));
 
   // Handle Android Back Gesture
   useEffect(() => {
@@ -175,12 +166,7 @@ export const NewSessionFlowScreen: React.FC<NewSessionFlowScreenProps> = ({
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <Animated.View
-          style={{
-            opacity: fadeAnim,
-            transform: [{ translateY: slideAnim }],
-          }}
-        >
+        <Animated.View style={stepAnimStyle}>
           {/* STEP 1: SELECT METHOD */}
           {step === 1 && (
             <View style={styles.stepContainer}>

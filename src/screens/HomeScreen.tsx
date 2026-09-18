@@ -1,18 +1,19 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  Modal,
-  TextInput,
-  Platform,
   RefreshControl,
-  Animated,
-  KeyboardAvoidingView,
   BackHandler,
 } from 'react-native';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  withRepeat,
+} from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
@@ -45,23 +46,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [refreshing, setRefreshing] = useState(false);
 
   // Skeleton pulse animation
-  const skeletonAnim = useRef(new Animated.Value(0.4)).current;
+  const skeletonOpacity = useSharedValue(0.4);
   useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(skeletonAnim, {
-          toValue: 0.9,
-          duration: 700,
-          useNativeDriver: true,
-        }),
-        Animated.timing(skeletonAnim, {
-          toValue: 0.4,
-          duration: 700,
-          useNativeDriver: true,
-        }),
-      ])
-    ).start();
-  }, [skeletonAnim]);
+    skeletonOpacity.value = withRepeat(withTiming(0.9, { duration: 700 }), -1, true);
+  }, []);
+  const skeletonAnimStyle = useAnimatedStyle(() => ({ opacity: skeletonOpacity.value }));
 
   // Handle Android Back Gesture / Button
   useEffect(() => {
@@ -173,23 +162,18 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   };
 
   // Entrance Animation
-  const contentFade = useRef(new Animated.Value(0)).current;
-  const contentSlide = useRef(new Animated.Value(18)).current;
+  const contentFade = useSharedValue(0);
+  const contentSlide = useSharedValue(18);
 
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(contentFade, {
-        toValue: 1,
-        duration: 350,
-        useNativeDriver: true,
-      }),
-      Animated.timing(contentSlide, {
-        toValue: 0,
-        duration: 350,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [contentFade, contentSlide]);
+    contentFade.value = withTiming(1, { duration: 350 });
+    contentSlide.value = withTiming(0, { duration: 350 });
+  }, []);
+
+  const contentAnimStyle = useAnimatedStyle(() => ({
+    opacity: contentFade.value,
+    transform: [{ translateY: contentSlide.value }],
+  }));
 
   return (
     <ScrollView
@@ -204,12 +188,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         />
       }
     >
-      <Animated.View
-        style={{
-          opacity: contentFade,
-          transform: [{ translateY: contentSlide }],
-        }}
-      >
+      <Animated.View style={contentAnimStyle}>
       {/* 1. TOP HEADER & STATUS BAR */}
       <View style={styles.topStatusHeader}>
         <View>
@@ -226,12 +205,12 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       {/* SKELETON LOADER STATE (Rendered when pulling to refresh) */}
       {refreshing ? (
         <View style={{ gap: 14, marginBottom: 16 }}>
-          <Animated.View style={[styles.skeletonCard, { opacity: skeletonAnim }]}>
+          <Animated.View style={[styles.skeletonCard, skeletonAnimStyle]}>
             <View style={styles.skeletonLineTop} />
             <View style={styles.skeletonLineMid} />
             <View style={styles.skeletonLineShort} />
           </Animated.View>
-          <Animated.View style={[styles.skeletonCardSmall, { opacity: skeletonAnim }]}>
+          <Animated.View style={[styles.skeletonCardSmall, skeletonAnimStyle]}>
             <View style={styles.skeletonLineTop} />
           </Animated.View>
         </View>
@@ -935,150 +914,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: Palette.zinc500,
     lineHeight: 14,
-  },
-
-  /* 7. NEW SESSION MODAL */
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(9, 9, 11, 0.55)',
-    justifyContent: 'flex-end',
-  },
-  newSessionModalCard: {
-    backgroundColor: '#ffffff',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 20,
-    paddingBottom: 36,
-  },
-  modalHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-  },
-  modalHeadingTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: Palette.zinc900,
-  },
-  modalHeadingSub: {
-    fontSize: 12,
-    color: Palette.zinc500,
-    marginTop: 2,
-  },
-  modalCloseBtn: {
-    padding: 6,
-  },
-  modalOptionsContainer: {
-    gap: 10,
-  },
-  modalOptionCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f8fafc',
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    gap: 12,
-  },
-  optionIconBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  optionTextBox: {
-    flex: 1,
-  },
-  optionTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: Palette.zinc900,
-    marginBottom: 2,
-  },
-  optionDescription: {
-    fontSize: 11,
-    color: Palette.zinc500,
-    lineHeight: 15,
-  },
-
-  /* Paste section in modal */
-  pasteSectionInModal: {
-    paddingTop: 4,
-  },
-  pasteHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  pasteInputLabel: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: Palette.zinc900,
-  },
-  pasteFromClipBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: Palette.indigo50,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  pasteFromClipText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: Palette.indigo600,
-  },
-  pasteInputArea: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 12,
-    padding: 14,
-    minHeight: 100,
-    fontSize: 14,
-    color: Palette.zinc900,
-    textAlignVertical: 'top',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    marginBottom: 16,
-  },
-  pasteModalActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 10,
-  },
-  backToPickerBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 8,
-    backgroundColor: Palette.zinc100,
-  },
-  backToPickerText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: Palette.zinc700,
-  },
-  createFromPasteBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Palette.zinc900,
-    paddingVertical: 12,
-    borderRadius: 8,
-    gap: 6,
-  },
-  createFromPasteBtnText: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#ffffff',
   },
 
   /* SKELETON STYLES */
