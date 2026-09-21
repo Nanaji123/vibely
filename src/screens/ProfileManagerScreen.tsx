@@ -9,20 +9,43 @@ import {
   Modal,
   Platform,
   KeyboardAvoidingView,
+  Alert,
+  Pressable,
+  RefreshControl,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import { Palette, ThemeColors } from '../theme/colors';
+import { Palette } from '../theme/colors';
 import { ThemeShadows } from '../theme/shadows';
 import { TargetProfileModel } from '../domain/index';
+import { RELATIONSHIPS, PERSONALITY_TRAITS } from '../constants/vibes';
+import { usePullRefresh } from '../lib/usePullRefresh';
+import { PaywallError } from '../context/AppContext';
 
 interface ProfileManagerScreenProps {
   profiles: TargetProfileModel[];
   activeProfile: TargetProfileModel;
   onSelectProfile: (profile: TargetProfileModel) => void;
-  onAddProfile: (profile: Omit<TargetProfileModel, 'id' | 'updatedAt'>) => void;
+  onAddProfile: (profile: Omit<TargetProfileModel, 'id' | 'updatedAt'>) => void | Promise<unknown>;
   onEditProfile?: (id: string, profile: Partial<TargetProfileModel>) => void;
   onDeleteProfile?: (id: string) => void;
 }
+
+const GENDERS: { id: TargetProfileModel['gender']; label: string }[] = [
+  { id: 'female', label: 'Her' },
+  { id: 'male', label: 'Him' },
+  { id: 'other', label: 'Them' },
+];
+
+const EMOJIS = ['❤️', '🔥', '✨', '🌙', '🌸', '😏', '🦋', '💫', '🍀', '🎯'];
+
+const relationshipLabel = (id: string) => RELATIONSHIPS.find((r) => r.id === id)?.label ?? id;
+const traitLabel = (id: string) => PERSONALITY_TRAITS.find((t) => t.id === id)?.label ?? id;
+
+const splitList = (s: string) =>
+  s
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
 
 export const ProfileManagerScreen: React.FC<ProfileManagerScreenProps> = ({
   profiles,
@@ -33,178 +56,160 @@ export const ProfileManagerScreen: React.FC<ProfileManagerScreenProps> = ({
   onDeleteProfile,
 }) => {
   const [showModal, setShowModal] = useState(false);
-  const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState('');
-  const [gender, setGender] = useState<'female' | 'male' | 'other'>('female');
+  const [gender, setGender] = useState<TargetProfileModel['gender']>('female');
   const [relationship, setRelationship] = useState('crush');
+  const [traits, setTraits] = useState<string[]>([]);
   const [emoji, setEmoji] = useState('❤️');
   const [likes, setLikes] = useState('');
   const [avoid, setAvoid] = useState('');
+  const [notes, setNotes] = useState('');
+  const [showMore, setShowMore] = useState(false);
+  const { refreshing, onRefresh } = usePullRefresh();
 
-  const handleOpenCreate = () => {
-    setEditingProfileId(null);
+  const openCreate = () => {
+    setEditingId(null);
     setName('');
     setGender('female');
     setRelationship('crush');
+    setTraits([]);
     setEmoji('❤️');
     setLikes('');
     setAvoid('');
+    setNotes('');
+    setShowMore(false);
     setShowModal(true);
   };
 
-  const handleOpenEdit = (prof: TargetProfileModel) => {
-    setEditingProfileId(prof.id);
-    setName(prof.name);
-    setGender((prof.gender as any) || 'female');
-    setRelationship(prof.relationship);
-    setEmoji(prof.avatarEmoji || '❤️');
-    setLikes(prof.likes ? prof.likes.join(', ') : '');
-    setAvoid(prof.thingsToAvoid ? prof.thingsToAvoid.join(', ') : '');
+  const openEdit = (p: TargetProfileModel) => {
+    setEditingId(p.id);
+    setName(p.name);
+    setGender(p.gender || 'female');
+    setRelationship(p.relationship);
+    setTraits(p.personalityTraits ?? []);
+    setEmoji(p.avatarEmoji || '❤️');
+    setLikes((p.likes ?? []).join(', '));
+    setAvoid((p.thingsToAvoid ?? []).join(', '));
+    setNotes(p.vibeSummary ?? '');
+    setShowMore(!!(p.likes?.length || p.thingsToAvoid?.length || p.vibeSummary));
     setShowModal(true);
   };
 
-  const handleSave = () => {
-    if (!name.trim()) return;
-    const likesArr = likes.split(',').map((s) => s.trim()).filter(Boolean);
-    const avoidArr = avoid.split(',').map((s) => s.trim()).filter(Boolean);
-    const vibeSummary = `${relationship.charAt(0).toUpperCase() + relationship.slice(1)} Context (${gender === 'female' ? 'Her' : gender === 'male' ? 'Him' : 'Them'})`;
+  const toggleTrait = (id: string) =>
+    setTraits((prev) => (prev.includes(id) ? prev.filter((t) => t !== id) : prev.length < 4 ? [...prev, id] : prev));
 
-    if (editingProfileId && onEditProfile) {
-      onEditProfile(editingProfileId, {
-        name: name.trim(),
-        gender,
-        relationship,
-        likes: likesArr,
-        thingsToAvoid: avoidArr,
-        vibeSummary,
-        avatarEmoji: emoji,
-      });
-    } else {
-      onAddProfile({
-        name: name.trim(),
-        gender,
-        relationship,
-        personalityTraits: ['witty', 'reserved'],
-        likes: likesArr,
-        thingsToAvoid: avoidArr,
-        vibeSummary,
-        avatarEmoji: emoji,
-      });
-    }
+  const canSave = name.trim().length > 0;
+
+  const save = () => {
+    if (!canSave) return;
+    const payload = {
+      name: name.trim(),
+      gender,
+      relationship,
+      personalityTraits: traits,
+      likes: splitList(likes),
+      thingsToAvoid: splitList(avoid),
+      vibeSummary: notes.trim(),
+      avatarEmoji: emoji,
+    };
     setShowModal(false);
+    if (editingId && onEditProfile) {
+      onEditProfile(editingId, payload);
+      return;
+    }
+    Promise.resolve(onAddProfile(payload)).catch((err) => {
+      // The paywall sheet already explains a PaywallError
+      if (err instanceof PaywallError) return;
+      Alert.alert('Could not add person', err instanceof Error ? err.message : 'Please try again.');
+    });
   };
 
-  const handleDelete = (id: string) => {
-    if (onDeleteProfile) {
-      onDeleteProfile(id);
-    }
+  const confirmDelete = (p: TargetProfileModel) => {
+    if (!onDeleteProfile) return;
+    Alert.alert(`Remove ${p.name}?`, 'Their chats stay, but the wingman will forget their profile.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Remove', style: 'destructive', onPress: () => onDeleteProfile(p.id) },
+    ]);
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      {/* Header Row */}
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Palette.zinc900} />}
+    >
       <View style={styles.headerRow}>
-        <View>
-          <Text style={styles.title}>Personality Memory</Text>
-          <Text style={styles.subtitle}>Profiles auto-inject context into AI replies</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>People</Text>
+          <Text style={styles.subtitle}>Who you're texting. The wingman tailors every reply to them.</Text>
         </View>
-
-        <TouchableOpacity style={styles.addBtn} onPress={handleOpenCreate} activeOpacity={0.8}>
-          <Feather name="plus" size={16} color="#ffffff" />
-          <Text style={styles.addBtnText}>New Profile</Text>
-        </TouchableOpacity>
+        {profiles.length > 0 ? (
+          <TouchableOpacity style={styles.addBtn} onPress={openCreate} activeOpacity={0.85} accessibilityLabel="Add person">
+            <Feather name="plus" size={18} color="#ffffff" />
+          </TouchableOpacity>
+        ) : null}
       </View>
 
-      {/* Empty State */}
       {profiles.length === 0 ? (
-        <View style={styles.emptyContainer}>
-          <View style={styles.emptyIconCircle}>
-            <Text style={styles.emptyEmoji}>🎭</Text>
+        <View style={styles.empty}>
+          <View style={styles.emptyArt}>
+            <Text style={styles.emptyEmoji}>💬</Text>
           </View>
-          <Text style={styles.emptyTitle}>No Target Profiles Yet</Text>
+          <Text style={styles.emptyTitle}>Add who you're texting</Text>
           <Text style={styles.emptySub}>
-            Create your first personality memory profile to let AI Wingman tailor flirty replies specifically for them!
+            A name and a relationship is enough to start. Add their personality and the replies get sharper.
           </Text>
-          <TouchableOpacity style={styles.emptyAddBtn} onPress={handleOpenCreate}>
-            <Feather name="plus" size={18} color="#ffffff" />
-            <Text style={styles.emptyAddBtnText}>Create Profile</Text>
+          <TouchableOpacity style={styles.emptyCta} onPress={openCreate} activeOpacity={0.9}>
+            <Feather name="user-plus" size={16} color="#ffffff" />
+            <Text style={styles.emptyCtaText}>Add a person</Text>
           </TouchableOpacity>
         </View>
       ) : (
-        /* Profile Cards List */
-        <View style={styles.profilesList}>
-          {profiles.map((prof) => {
-            const isActive = prof.id === activeProfile.id;
+        <View style={styles.list}>
+          {profiles.map((p) => {
+            const active = p.id === activeProfile.id;
             return (
               <TouchableOpacity
-                key={prof.id}
-                style={[styles.profileCard, isActive && styles.profileCardActive]}
-                onPress={() => onSelectProfile(prof)}
-                activeOpacity={0.85}
+                key={p.id}
+                style={[styles.card, active && styles.cardActive]}
+                onPress={() => onSelectProfile(p)}
+                activeOpacity={0.88}
               >
-                <View style={styles.avatarBox}>
-                  <Text style={styles.avatarEmoji}>{prof.avatarEmoji || '❤️'}</Text>
+                <View style={styles.cardAvatar}>
+                  <Text style={styles.cardAvatarEmoji}>{p.avatarEmoji || '❤️'}</Text>
                 </View>
-
-                <View style={styles.profInfo}>
-                  <View style={styles.nameRow}>
-                    <Text style={styles.profName}>{prof.name}</Text>
-                    <View style={styles.relBadge}>
-                      <Text style={styles.relBadgeText}>{prof.relationship}</Text>
-                    </View>
-                    <View
-                      style={[
-                        styles.relBadge,
-                        { backgroundColor: prof.gender === 'female' ? '#fdf2f8' : '#eff6ff' },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.relBadgeText,
-                          { color: prof.gender === 'female' ? '#db2777' : '#2563eb' },
-                        ]}
-                      >
-                        {prof.gender === 'female'
-                          ? '👩 Her'
-                          : prof.gender === 'male'
-                          ? '👨 Him'
-                          : '🧑 Them'}
-                      </Text>
-                    </View>
+                <View style={{ flex: 1 }}>
+                  <View style={styles.cardNameRow}>
+                    <Text style={styles.cardName} numberOfLines={1}>
+                      {p.name}
+                    </Text>
+                    {active ? (
+                      <View style={styles.activePill}>
+                        <Text style={styles.activePillText}>ACTIVE</Text>
+                      </View>
+                    ) : null}
                   </View>
-
-                  <Text style={styles.profSummary}>{prof.vibeSummary}</Text>
-
-                  {prof.likes && prof.likes.length > 0 && (
-                    <Text style={styles.likesText}>Likes: {prof.likes.join(' • ')}</Text>
-                  )}
-                </View>
-
-                <View style={styles.cardRightActions}>
-                  {isActive && (
-                    <View style={styles.activeBadge}>
-                      <Feather name="check-circle" size={16} color={Palette.emerald600} />
+                  <Text style={styles.cardMeta}>
+                    {relationshipLabel(p.relationship)} · {GENDERS.find((g) => g.id === p.gender)?.label ?? 'Them'}
+                  </Text>
+                  {p.personalityTraits.length > 0 ? (
+                    <View style={styles.traitRow}>
+                      {p.personalityTraits.map((t) => (
+                        <View key={t} style={styles.traitChip}>
+                          <Text style={styles.traitChipText}>{traitLabel(t)}</Text>
+                        </View>
+                      ))}
                     </View>
-                  )}
-
-                  <TouchableOpacity
-                    style={styles.iconBtn}
-                    onPress={(e) => {
-                      e.stopPropagation();
-                      handleOpenEdit(prof);
-                    }}
-                  >
-                    <Feather name="edit-2" size={15} color={Palette.zinc600} />
+                  ) : null}
+                </View>
+                <View style={styles.cardActions}>
+                  <TouchableOpacity style={styles.iconBtn} onPress={() => openEdit(p)} hitSlop={6} accessibilityLabel="Edit">
+                    <Feather name="edit-2" size={14} color={Palette.zinc600} />
                   </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.iconBtn, styles.deleteBtn]}
-                    onPress={(e) => {
-                      e.stopPropagation();
-                      handleDelete(prof.id);
-                    }}
-                  >
-                    <Feather name="trash-2" size={15} color="#ef4444" />
+                  <TouchableOpacity style={styles.iconBtn} onPress={() => confirmDelete(p)} hitSlop={6} accessibilityLabel="Remove">
+                    <Feather name="trash-2" size={14} color={Palette.rose600} />
                   </TouchableOpacity>
                 </View>
               </TouchableOpacity>
@@ -213,105 +218,119 @@ export const ProfileManagerScreen: React.FC<ProfileManagerScreenProps> = ({
         </View>
       )}
 
-      {/* Create / Edit Modal */}
-      <Modal visible={showModal} animationType="slide" transparent>
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalCard}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>
-                  {editingProfileId ? 'Edit Target Profile' : 'New Target Profile'}
-                </Text>
-                <TouchableOpacity onPress={() => setShowModal(false)}>
+      {/* ADD / EDIT SHEET */}
+      <Modal visible={showModal} animationType="slide" transparent onRequestClose={() => setShowModal(false)}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <View style={styles.backdrop}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowModal(false)} />
+            <View style={styles.sheet}>
+              <View style={styles.sheetHandle} />
+              <View style={styles.sheetHeader}>
+                <Text style={styles.sheetTitle}>{editingId ? 'Edit person' : 'New person'}</Text>
+                <TouchableOpacity onPress={() => setShowModal(false)} hitSlop={8}>
                   <Feather name="x" size={20} color={Palette.zinc700} />
                 </TouchableOpacity>
               </View>
 
-              <ScrollView style={{ padding: 16 }}>
-                <Text style={styles.fieldLabel}>Name:</Text>
-                <TextInput
-                  style={styles.input}
-                  value={name}
-                  onChangeText={setName}
-                  placeholder="e.g. Laxmi"
-                  placeholderTextColor={Palette.zinc400}
-                />
+              <ScrollView contentContainerStyle={styles.sheetBody} keyboardShouldPersistTaps="handled">
+                <View style={styles.nameRow}>
+                  <TouchableOpacity
+                    style={styles.emojiPick}
+                    onPress={() => setEmoji(EMOJIS[(EMOJIS.indexOf(emoji) + 1) % EMOJIS.length])}
+                    activeOpacity={0.8}
+                    accessibilityLabel="Change emoji"
+                  >
+                    <Text style={styles.emojiPickText}>{emoji}</Text>
+                  </TouchableOpacity>
+                  <TextInput
+                    style={styles.nameInput}
+                    value={name}
+                    onChangeText={setName}
+                    placeholder="Their name"
+                    placeholderTextColor={Palette.zinc400}
+                    autoFocus={!editingId}
+                    returnKeyType="done"
+                  />
+                </View>
 
-                <Text style={[styles.fieldLabel, { marginTop: 12 }]}>
-                  Gender (Who are you texting?):
-                </Text>
-                <View style={styles.relChipsRow}>
-                  {[
-                    { id: 'female', label: '👩 Female (Her)' },
-                    { id: 'male', label: '👨 Male (Him)' },
-                    { id: 'other', label: '🧑 Non-binary' },
-                  ].map((g) => (
+                <Text style={styles.label}>Who are they?</Text>
+                <View style={styles.segment}>
+                  {GENDERS.map((g) => (
                     <TouchableOpacity
                       key={g.id}
-                      style={[styles.relChip, gender === g.id && styles.relChipActive]}
-                      onPress={() => setGender(g.id as any)}
+                      style={[styles.segmentItem, gender === g.id && styles.segmentItemActive]}
+                      onPress={() => setGender(g.id)}
                     >
-                      <Text
-                        style={[
-                          styles.relChipText,
-                          gender === g.id && styles.relChipTextActive,
-                        ]}
-                      >
-                        {g.label}
-                      </Text>
+                      <Text style={[styles.segmentText, gender === g.id && styles.segmentTextActive]}>{g.label}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
 
-                <Text style={[styles.fieldLabel, { marginTop: 12 }]}>Relationship Stage:</Text>
-                <View style={styles.relChipsRow}>
-                  {['crush', 'dating', 'partner', 'friend', 'colleague'].map((rel) => (
+                <Text style={styles.label}>Relationship</Text>
+                <View style={styles.chips}>
+                  {RELATIONSHIPS.map((r) => (
                     <TouchableOpacity
-                      key={rel}
-                      style={[styles.relChip, relationship === rel && styles.relChipActive]}
-                      onPress={() => setRelationship(rel)}
+                      key={r.id}
+                      style={[styles.chip, relationship === r.id && styles.chipActive]}
+                      onPress={() => setRelationship(r.id)}
                     >
-                      <Text
-                        style={[
-                          styles.relChipText,
-                          relationship === rel && styles.relChipTextActive,
-                        ]}
-                      >
-                        {rel}
-                      </Text>
+                      <Text style={[styles.chipText, relationship === r.id && styles.chipTextActive]}>{r.label}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
 
-                <Text style={[styles.fieldLabel, { marginTop: 12 }]}>
-                  Things they like (Comma separated):
-                </Text>
-                <TextInput
-                  style={styles.input}
-                  value={likes}
-                  onChangeText={setLikes}
-                  placeholder="e.g. Movies, Matcha, Gaming"
-                  placeholderTextColor={Palette.zinc400}
-                />
+                <View style={styles.labelRow}>
+                  <Text style={styles.label}>Personality</Text>
+                  <Text style={styles.labelHint}>pick up to 4</Text>
+                </View>
+                <View style={styles.chips}>
+                  {PERSONALITY_TRAITS.map((t) => {
+                    const on = traits.includes(t.id);
+                    return (
+                      <TouchableOpacity key={t.id} style={[styles.chip, on && styles.chipActive]} onPress={() => toggleTrait(t.id)}>
+                        <Text style={[styles.chipText, on && styles.chipTextActive]}>{t.label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
 
-                <Text style={[styles.fieldLabel, { marginTop: 12 }]}>
-                  Things to avoid (Comma separated):
-                </Text>
-                <TextInput
-                  style={styles.input}
-                  value={avoid}
-                  onChangeText={setAvoid}
-                  placeholder="e.g. Long paragraphs, Too serious"
-                  placeholderTextColor={Palette.zinc400}
-                />
+                <TouchableOpacity style={styles.moreToggle} onPress={() => setShowMore((v) => !v)} activeOpacity={0.7}>
+                  <Text style={styles.moreToggleText}>More details</Text>
+                  <Feather name={showMore ? 'chevron-up' : 'chevron-down'} size={16} color={Palette.zinc500} />
+                </TouchableOpacity>
 
-                <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-                  <Text style={styles.saveBtnText}>
-                    {editingProfileId ? 'Save Profile Changes' : 'Save Profile Context'}
-                  </Text>
+                {showMore ? (
+                  <View style={styles.moreBox}>
+                    <Text style={styles.label}>Things they like</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={likes}
+                      onChangeText={setLikes}
+                      placeholder="Movies, matcha, gym — comma separated"
+                      placeholderTextColor={Palette.zinc400}
+                    />
+                    <Text style={styles.label}>Avoid mentioning</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={avoid}
+                      onChangeText={setAvoid}
+                      placeholder="Their ex, work stress…"
+                      placeholderTextColor={Palette.zinc400}
+                    />
+                    <Text style={styles.label}>Notes for the wingman</Text>
+                    <TextInput
+                      style={[styles.input, styles.inputMulti]}
+                      value={notes}
+                      onChangeText={setNotes}
+                      placeholder="Anything that helps: how you met, inside jokes, what you're going for"
+                      placeholderTextColor={Palette.zinc400}
+                      multiline
+                    />
+                  </View>
+                ) : null}
+
+                <TouchableOpacity style={[styles.saveBtn, !canSave && styles.saveBtnDisabled]} onPress={save} disabled={!canSave} activeOpacity={0.9}>
+                  <Text style={styles.saveBtnText}>{editingId ? 'Save changes' : 'Add person'}</Text>
                 </TouchableOpacity>
               </ScrollView>
             </View>
@@ -323,247 +342,97 @@ export const ProfileManagerScreen: React.FC<ProfileManagerScreenProps> = ({
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-  },
-  content: {
-    padding: 16,
-    paddingBottom: 110,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: Palette.zinc900,
-    letterSpacing: -0.3,
-  },
-  subtitle: {
-    fontSize: 12,
-    color: Palette.zinc500,
-  },
-  addBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  container: { flex: 1, backgroundColor: '#ffffff' },
+  content: { paddingHorizontal: 18, paddingTop: 10, paddingBottom: 120 },
+
+  headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 18 },
+  title: { fontSize: 26, fontWeight: '800', color: Palette.zinc900, letterSpacing: -0.6 },
+  subtitle: { fontSize: 13, color: Palette.zinc500, marginTop: 3, lineHeight: 18 },
+  addBtn: { width: 40, height: 40, borderRadius: 14, backgroundColor: Palette.zinc900, alignItems: 'center', justifyContent: 'center', ...ThemeShadows.md },
+
+  empty: { alignItems: 'center', paddingVertical: 40, paddingHorizontal: 12 },
+  emptyArt: { width: 84, height: 84, borderRadius: 28, backgroundColor: Palette.zinc100, alignItems: 'center', justifyContent: 'center', marginBottom: 18 },
+  emptyEmoji: { fontSize: 36 },
+  emptyTitle: { fontSize: 20, fontWeight: '800', color: Palette.zinc900, letterSpacing: -0.3 },
+  emptySub: { fontSize: 14, lineHeight: 20, color: Palette.zinc500, textAlign: 'center', marginTop: 8, maxWidth: 300 },
+  emptyCta: {
+    marginTop: 22,
+    height: 50,
+    paddingHorizontal: 22,
+    borderRadius: 14,
     backgroundColor: Palette.zinc900,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    gap: 4,
-  },
-  addBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#ffffff',
-  },
-  profilesList: {
-    gap: 12,
-  },
-  profileCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    gap: 12,
-    ...ThemeShadows.sm,
-  },
-  profileCardActive: {
-    borderColor: Palette.zinc900,
-    backgroundColor: '#fafafa',
-  },
-  avatarBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 10,
-    backgroundColor: '#f4f4f5',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  avatarEmoji: {
-    fontSize: 22,
-  },
-  profInfo: {
-    flex: 1,
-  },
-  nameRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginBottom: 2,
+    ...ThemeShadows.md,
   },
-  profName: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: Palette.zinc900,
-  },
-  relBadge: {
-    backgroundColor: Palette.indigo50,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  relBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: Palette.indigo600,
-    textTransform: 'uppercase',
-  },
-  profSummary: {
-    fontSize: 12,
-    color: Palette.zinc500,
-    marginBottom: 4,
-  },
-  likesText: {
-    fontSize: 11,
-    color: Palette.zinc400,
-  },
-  cardRightActions: {
+  emptyCtaText: { color: '#ffffff', fontSize: 15, fontWeight: '800' },
+
+  list: { gap: 10 },
+  card: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 12,
+    padding: 14,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: Palette.zinc200,
+    backgroundColor: '#ffffff',
   },
-  activeBadge: {
-    marginRight: 4,
-  },
-  iconBtn: {
-    padding: 6,
-    borderRadius: 6,
-    backgroundColor: '#f4f4f5',
-  },
-  deleteBtn: {
-    backgroundColor: '#fef2f2',
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 48,
-    paddingHorizontal: 24,
-    backgroundColor: '#fafafa',
+  cardActive: { borderColor: Palette.zinc900, backgroundColor: Palette.zinc50 },
+  cardAvatar: { width: 48, height: 48, borderRadius: 16, backgroundColor: Palette.zinc100, alignItems: 'center', justifyContent: 'center' },
+  cardAvatarEmoji: { fontSize: 24 },
+  cardNameRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  cardName: { fontSize: 16, fontWeight: '800', color: Palette.zinc900, flexShrink: 1 },
+  activePill: { backgroundColor: Palette.zinc900, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 999 },
+  activePillText: { color: '#ffffff', fontSize: 9, fontWeight: '800', letterSpacing: 0.6 },
+  cardMeta: { fontSize: 12, color: Palette.zinc500, marginTop: 2 },
+  traitRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 8 },
+  traitChip: { backgroundColor: '#ffffff', borderWidth: 1, borderColor: Palette.zinc200, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999 },
+  traitChipText: { fontSize: 10, fontWeight: '700', color: Palette.zinc600 },
+  cardActions: { gap: 6 },
+  iconBtn: { width: 32, height: 32, borderRadius: 10, backgroundColor: '#ffffff', borderWidth: 1, borderColor: Palette.zinc200, alignItems: 'center', justifyContent: 'center' },
+
+  backdrop: { flex: 1, backgroundColor: 'rgba(9,9,11,0.5)', justifyContent: 'flex-end' },
+  sheet: { backgroundColor: '#ffffff', borderTopLeftRadius: 28, borderTopRightRadius: 28, maxHeight: '92%', ...ThemeShadows.lg },
+  sheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: Palette.zinc200, alignSelf: 'center', marginTop: 10 },
+  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 12, paddingBottom: 6 },
+  sheetTitle: { fontSize: 20, fontWeight: '800', color: Palette.zinc900, letterSpacing: -0.4 },
+  sheetBody: { paddingHorizontal: 20, paddingBottom: 36 },
+
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8 },
+  emojiPick: { width: 52, height: 52, borderRadius: 16, backgroundColor: Palette.zinc100, alignItems: 'center', justifyContent: 'center' },
+  emojiPickText: { fontSize: 26 },
+  nameInput: {
+    flex: 1,
+    height: 52,
     borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#e4e4e7',
-    borderStyle: 'dashed',
-    marginTop: 10,
-  },
-  emptyIconCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: '#f4f4f5',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  emptyEmoji: {
-    fontSize: 32,
-  },
-  emptyTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: Palette.zinc900,
-    marginBottom: 8,
-  },
-  emptySub: {
-    fontSize: 13,
-    color: Palette.zinc500,
-    textAlign: 'center',
-    lineHeight: 18,
-    marginBottom: 20,
-  },
-  emptyAddBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Palette.zinc900,
+    borderWidth: 1.5,
+    borderColor: Palette.zinc200,
     paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 10,
-    gap: 6,
-  },
-  emptyAddBtnText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#ffffff',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(9, 9, 11, 0.5)',
-    justifyContent: 'flex-end',
-  },
-  modalCard: {
-    backgroundColor: '#ffffff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: '85%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-  },
-  modalTitle: {
     fontSize: 17,
-    fontWeight: '800',
+    fontWeight: '700',
     color: Palette.zinc900,
   },
-  fieldLabel: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: Palette.zinc700,
-    marginBottom: 6,
-  },
-  input: {
-    backgroundColor: Palette.zinc100,
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 14,
-    color: Palette.zinc900,
-  },
-  relChipsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 4,
-  },
-  relChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 6,
-    backgroundColor: Palette.zinc100,
-  },
-  relChipActive: {
-    backgroundColor: Palette.zinc900,
-  },
-  relChipText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: Palette.zinc600,
-    textTransform: 'capitalize',
-  },
-  relChipTextActive: {
-    color: '#ffffff',
-  },
-  saveBtn: {
-    backgroundColor: Palette.zinc900,
-    paddingVertical: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 20,
-    marginBottom: 20,
-  },
-  saveBtnText: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#ffffff',
-  },
+  label: { fontSize: 12, fontWeight: '800', color: Palette.zinc500, letterSpacing: 0.4, textTransform: 'uppercase', marginTop: 18, marginBottom: 8 },
+  labelRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
+  labelHint: { fontSize: 11, color: Palette.zinc400, fontWeight: '600' },
+  segment: { flexDirection: 'row', backgroundColor: Palette.zinc100, borderRadius: 14, padding: 4, gap: 4 },
+  segmentItem: { flex: 1, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  segmentItemActive: { backgroundColor: '#ffffff', ...ThemeShadows.sm },
+  segmentText: { fontSize: 14, fontWeight: '700', color: Palette.zinc500 },
+  segmentTextActive: { color: Palette.zinc900 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { paddingHorizontal: 13, height: 36, borderRadius: 999, borderWidth: 1.5, borderColor: Palette.zinc200, alignItems: 'center', justifyContent: 'center', backgroundColor: '#ffffff' },
+  chipActive: { borderColor: Palette.zinc900, backgroundColor: Palette.zinc900 },
+  chipText: { fontSize: 13, fontWeight: '700', color: Palette.zinc700 },
+  chipTextActive: { color: '#ffffff' },
+  moreToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 20, paddingVertical: 10, borderTopWidth: 1, borderTopColor: Palette.zinc100 },
+  moreToggleText: { fontSize: 14, fontWeight: '700', color: Palette.zinc700 },
+  moreBox: {},
+  input: { height: 46, borderRadius: 14, borderWidth: 1.5, borderColor: Palette.zinc200, paddingHorizontal: 14, fontSize: 14, color: Palette.zinc900 },
+  inputMulti: { height: 84, paddingTop: 12, textAlignVertical: 'top' },
+  saveBtn: { marginTop: 24, height: 52, borderRadius: 16, backgroundColor: Palette.zinc900, alignItems: 'center', justifyContent: 'center', ...ThemeShadows.md },
+  saveBtnDisabled: { backgroundColor: Palette.zinc200 },
+  saveBtnText: { color: '#ffffff', fontSize: 15, fontWeight: '800' },
 });

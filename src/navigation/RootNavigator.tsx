@@ -11,6 +11,7 @@ import { AuthScreen } from '../screens/AuthScreen';
 import { OnboardingScreen } from '../screens/OnboardingScreen';
 import { ChatStudioScreen } from '../screens/ChatStudioScreen';
 import { NewSessionFlowScreen } from '../screens/NewSessionFlowScreen';
+import { ChatHistoryScreen } from '../screens/ChatHistoryScreen';
 import { MainStackScreen } from './MainStackScreen';
 import type { RootStackParamList } from './types';
 
@@ -74,11 +75,15 @@ const StudioRouteScreen: React.FC<NativeStackScreenProps<RootStackParamList, 'St
     generateBranches,
     extractChatText,
     swapSides,
+    subscription,
+    showPaywall,
   } = useApp();
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#ffffff' }} edges={['top', 'left', 'right', 'bottom']}>
       <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
       <ChatStudioScreen
+        subscription={subscription}
+        onOpenPaywall={showPaywall}
         activeProfile={activeProfile}
         messages={currentConversation.messages}
         onUpdateMessages={updateMessages}
@@ -97,13 +102,14 @@ const StudioRouteScreen: React.FC<NativeStackScreenProps<RootStackParamList, 'St
 
 const NewSessionFlowRouteScreen: React.FC<
   NativeStackScreenProps<RootStackParamList, 'NewSessionFlow'>
-> = ({ navigation }) => {
+> = ({ navigation, route }) => {
   const { activeProfile, startNewSession, createCustomSession, createScreenshotSession } = useApp();
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#ffffff' }} edges={['top', 'left', 'right', 'bottom']}>
       <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
       <NewSessionFlowScreen
         activeProfile={activeProfile}
+        initialMethod={route.params?.method}
         onBack={() => navigation.goBack()}
         onStartNewSession={startNewSession}
         onCreateCustomSession={async (rawText, mode, profile) => {
@@ -118,6 +124,24 @@ const NewSessionFlowRouteScreen: React.FC<
   );
 };
 
+const HistoryRouteScreen: React.FC<NativeStackScreenProps<RootStackParamList, 'History'>> = ({ navigation }) => {
+  const { conversations, loadConversation, deleteConversation } = useApp();
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#ffffff' }} edges={['top', 'left', 'right', 'bottom']}>
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+      <ChatHistoryScreen
+        conversations={conversations}
+        onBack={() => navigation.goBack()}
+        onOpenConversation={(conv) => {
+          loadConversation(conv);
+          navigation.navigate('Studio');
+        }}
+        onDeleteConversation={deleteConversation}
+      />
+    </SafeAreaView>
+  );
+};
+
 export const RootNavigator: React.FC = () => {
   return (
     <Stack.Navigator initialRouteName="Splash" screenOptions={{ headerShown: false }}>
@@ -127,6 +151,7 @@ export const RootNavigator: React.FC = () => {
       <Stack.Screen name="Main" component={MainStackScreen} />
       <Stack.Screen name="Studio" component={StudioRouteScreen} />
       <Stack.Screen name="NewSessionFlow" component={NewSessionFlowRouteScreen} />
+      <Stack.Screen name="History" component={HistoryRouteScreen} />
     </Stack.Navigator>
   );
 };

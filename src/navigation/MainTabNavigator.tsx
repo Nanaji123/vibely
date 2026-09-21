@@ -10,7 +10,6 @@ import { useApp } from '../context/AppContext';
 import { HomeScreen } from '../screens/HomeScreen';
 import { PulseAnalysisScreen } from '../screens/PulseAnalysisScreen';
 import { ProfileManagerScreen } from '../screens/ProfileManagerScreen';
-import { PaywallScreen } from '../screens/PaywallScreen';
 import type { MainTabParamList, RootStackParamList } from './types';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -22,15 +21,23 @@ type TabNav = CompositeNavigationProp<
 
 const HomeTabScreen: React.FC = () => {
   const navigation = useNavigation<TabNav>();
-  const { activeProfile, hasProfiles, conversations, startNewSession, loadConversation } = useApp();
+  const { activeProfile, hasProfiles, conversations, currentConversation, startNewSession, loadConversation, subscription, showPaywall, account, profiles, selectProfile } =
+    useApp();
   const root = () => navigation.getParent<NativeStackNavigationProp<RootStackParamList>>();
 
   return (
     <HomeScreen
       activeProfile={activeProfile}
       hasProfiles={hasProfiles}
+      profiles={profiles}
       recentConversations={conversations}
-      onStartNewSession={() => root()?.navigate('NewSessionFlow')}
+      currentConversation={currentConversation}
+      subscription={subscription}
+      displayName={account?.displayName || account?.googleName || ''}
+      onStartNewSession={(method) => root()?.navigate('NewSessionFlow', method ? { method } : undefined)}
+      onSelectProfile={selectProfile}
+      onOpenPaywall={showPaywall}
+      onViewAllChats={() => root()?.navigate('History')}
       onOpenConversation={(conv) => {
         loadConversation(conv);
         root()?.navigate('Studio');
@@ -46,6 +53,7 @@ const HomeTabScreen: React.FC = () => {
 };
 
 const PulseTabScreen: React.FC = () => {
+  const navigation = useNavigation<TabNav>();
   const { activeProfile, currentConversation, hasProfiles, analyzeCurrentConversation } = useApp();
   return (
     <PulseAnalysisScreen
@@ -53,6 +61,11 @@ const PulseTabScreen: React.FC = () => {
       hasProfiles={hasProfiles}
       conversation={currentConversation}
       onAnalyze={analyzeCurrentConversation}
+      onGetStarted={() =>
+        hasProfiles
+          ? navigation.getParent<NativeStackNavigationProp<RootStackParamList>>()?.navigate('NewSessionFlow')
+          : navigation.navigate('Profiles')
+      }
     />
   );
 };
@@ -71,20 +84,6 @@ const ProfilesTabScreen: React.FC = () => {
   );
 };
 
-const ProTabScreen: React.FC = () => {
-  const navigation = useNavigation<TabNav>();
-  const { subscription, upgradePlan } = useApp();
-  return (
-    <PaywallScreen
-      subscription={subscription}
-      onUpgrade={(plan) => {
-        upgradePlan(plan);
-        navigation.navigate('Home');
-      }}
-    />
-  );
-};
-
 export const MainTabNavigator: React.FC = () => {
   return (
     <Tab.Navigator
@@ -94,7 +93,6 @@ export const MainTabNavigator: React.FC = () => {
       <Tab.Screen name="Home" component={HomeTabScreen} />
       <Tab.Screen name="Pulse" component={PulseTabScreen} />
       <Tab.Screen name="Profiles" component={ProfilesTabScreen} />
-      <Tab.Screen name="Pro" component={ProTabScreen} />
     </Tab.Navigator>
   );
 };

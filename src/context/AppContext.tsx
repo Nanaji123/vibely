@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useAction, useConvexAuth } from 'convex/react';
+import { ConvexError } from 'convex/values';
 import { api } from '../../convex/_generated/api';
 import type { Id } from '../../convex/_generated/dataModel';
 import {
@@ -9,6 +10,10 @@ import {
   UserSubscriptionModel,
   SuggestionOptionModel,
   DialogTreeNodeModel,
+  PaywallReason,
+  messagesLeft,
+  chatsLeft,
+  profilesLeft,
 } from '../domain/index';
 
 const FALLBACK_PROFILE: TargetProfileModel = {
@@ -22,6 +27,39 @@ const FALLBACK_PROFILE: TargetProfileModel = {
   vibeSummary: 'New Profile',
   avatarEmoji: '❤️',
   updatedAt: new Date().toISOString(),
+};
+
+// The backend rejects work past the plan's limits; surface that as the paywall sheet
+export class PaywallError extends Error {
+  reason: PaywallReason;
+  constructor(reason: PaywallReason) {
+    super(
+      reason === 'chats'
+        ? "You've used your free chats."
+        : reason === 'profiles'
+        ? "You've reached the people limit for your plan."
+        : "You've used your free replies."
+    );
+    this.name = 'PaywallError';
+    this.reason = reason;
+  }
+}
+const paywallReasonOf = (err: unknown): PaywallReason | null => {
+  if (!(err instanceof ConvexError)) return null;
+  const data = err.data as { code?: string; reason?: PaywallReason } | undefined;
+  return data?.code === 'PAYWALL' ? data.reason ?? 'messages' : null;
+};
+
+const FREE_SUBSCRIPTION: UserSubscriptionModel = {
+  plan: 'free',
+  renewsAt: null,
+  messagesUsed: 0,
+  messagesLimit: 20,
+  chatsUsed: 0,
+  chatsLimit: 3,
+  profilesUsed: 0,
+  profilesLimit: 2,
+  predictions: true,
 };
 
 const EMPTY_CONVERSATION: ConversationModel = {
@@ -44,19 +82,26 @@ const pronoun = (gender: string, form: 'subject' | 'object') => {
 const buildWelcomeMessage = (profile: TargetProfileModel) =>
   `Hey! I'm your wingman for ${profile.name}. What did ${pronoun(profile.gender, 'subject')} text you? Tell me or upload a screenshot and I'll break down the scene!`;
 
-const pickTopSuggestions = (
-  responses: { category: string; replyText: string; explanation: string }[],
-  desiredVibe: string
-) => {
-  const vibeMatch = responses.filter((r) => r.category.toLowerCase() === desiredVibe.toLowerCase());
-  const pool = vibeMatch.length >= 3 ? vibeMatch : responses;
-  return pool.slice(0, 3).map((r, i) => ({
+// The backend already returns up to 3 replies in the requested vibe
+const toSuggestions = (
+  responses: { category: string; replyText: string; explanation: string }[]
+) =>
+  responses.slice(0, 3).map((r, i) => ({
     id: `s-${Date.now()}-${i}`,
     category: r.category,
     replyText: r.replyText,
     toneVariant: r.explanation,
   }));
-};
+
+// Everything the coach should know about the other person, in the shape the AI actions expect
+const profileContext = (profile: TargetProfileModel, gender: string) => ({
+  targetName: profile.name,
+  relationship: `${profile.relationship} (refer to them as ${pronoun(gender, 'subject')}/${pronoun(gender, 'object')})`,
+  personalityTraits: profile.personalityTraits,
+  likes: profile.likes,
+  thingsToAvoid: profile.thingsToAvoid,
+  vibeSummary: profile.vibeSummary,
+});
 
 // Convex rejects `undefined` fields, so only include the optional ones that are set
 // Turns the stored thread into roles the coach understands: their messages, what you already sent,
@@ -125,12 +170,17 @@ interface AppContextType {
   swapSides: (ids: string[]) => Promise<void>;
   analyzeCurrentConversation: () => Promise<void>;
   loadConversation: (conv: ConversationModel) => void;
+  deleteConversation: (id: string) => Promise<void>;
   updateMessages: (messages: ChatMessageModel[]) => Promise<void>;
   updateVibe: (vibe: string) => Promise<void>;
   hasMoreMessages: boolean;
   loadEarlierMessages: () => void;
   upgradePlan: (plan: 'plus' | 'pro') => Promise<void>;
-  useCredit: () => Promise<boolean>;
+  changePlan: (plan: 'free' | 'plus' | 'pro') => Promise<void>;
+  paywallVisible: boolean;
+  paywallReason: PaywallReason;
+  showPaywall: (reason?: PaywallReason) => void;
+  hidePaywall: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -150,8 +200,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const saveConversationMutation = useMutation(api.conversations.saveConversation);
   const updateConversationMutation = useMutation(api.conversations.updateConversation);
   const syncMessagesMutation = useMutation(api.conversations.syncMessages);
-  const setSubscriptionMutation = useMutation(api.subscriptions.setSubscription);
-  const useCreditMutation = useMutation(api.subscriptions.useCredit);
+  const setPlanMutation = useMutation(api.subscriptions.setPlan);
   const generateRepliesAction = useAction(api.ai.generateReplies);
   const coachChatAction = useAction(api.ai.coachChat);
   const extractChatAction = useAction(api.ai.extractChatFromImages);
@@ -159,6 +208,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const swapSidesMutation = useMutation(api.conversations.swapSides);
   const analyzePulseAction = useAction(api.ai.analyzeConversationPulse);
   const saveAnalysisMutation = useMutation(api.conversations.saveAnalysis);
+  const deleteConversationMutation = useMutation(api.conversations.deleteConversation);
 
   const profiles: TargetProfileModel[] = useMemo(
     () =>
@@ -195,16 +245,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [conversationsQuery]
   );
 
-  const subscription: UserSubscriptionModel = subscriptionQuery
-    ? {
-        plan: subscriptionQuery.plan,
-        creditsRemaining: subscriptionQuery.creditsRemaining,
-        unlimited: subscriptionQuery.unlimited,
-      }
-    : { plan: 'free', creditsRemaining: 3, unlimited: false };
+  const subscription: UserSubscriptionModel = subscriptionQuery ?? FREE_SUBSCRIPTION;
 
   const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [paywall, setPaywall] = useState<{ visible: boolean; reason: PaywallReason }>({ visible: false, reason: 'upsell' });
+  const showPaywall = (reason: PaywallReason = 'upsell') => setPaywall({ visible: true, reason });
+  const hidePaywall = () => setPaywall((p) => ({ ...p, visible: false }));
+
+  // Turns the backend's PAYWALL rejection into the subscription sheet
+  const guarded = async <T,>(run: () => Promise<T>): Promise<T> => {
+    try {
+      return await run();
+    } catch (err) {
+      const reason = paywallReasonOf(err);
+      if (reason) {
+        showPaywall(reason);
+        throw new PaywallError(reason);
+      }
+      throw err;
+    }
+  };
+
+  // AI calls additionally short-circuit locally when the free replies are known to be gone
+  const metered = async <T,>(run: () => Promise<T>): Promise<T> => {
+    if (messagesLeft(subscription) <= 0) {
+      showPaywall('messages');
+      throw new PaywallError('messages');
+    }
+    return guarded(run);
+  };
 
   useEffect(() => {
     if (!activeProfileId && profiles.length > 0) {
@@ -213,8 +283,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [profiles, activeProfileId]);
 
   const activeProfile = profiles.find((p) => p.id === activeProfileId) ?? profiles[0] ?? FALLBACK_PROFILE;
+
+  // With nothing opened yet, prefer the active person's latest conversation that has real chat in it
+  // (a freshly started session only holds the welcome message and has nothing to analyze)
+  const hasRealChat = (c: ConversationModel) =>
+    !!c.analysis || c.messages.some((m) => m.sender === 'them' || (m.sender === 'you' && /said:/i.test(m.text)));
+  const defaultConversation = useMemo(() => {
+    const theirs = conversations.filter(
+      (c) => c.profileId === activeProfile.id || c.targetName.toLowerCase() === activeProfile.name.toLowerCase()
+    );
+    return theirs.find(hasRealChat) ?? theirs[0] ?? conversations.find(hasRealChat) ?? conversations[0];
+  }, [conversations, activeProfile.id, activeProfile.name]);
+
   const conversationSummary =
-    conversations.find((c) => c.id === currentConversationId) ?? conversations[0] ?? EMPTY_CONVERSATION;
+    conversations.find((c) => c.id === currentConversationId) ?? defaultConversation ?? EMPTY_CONVERSATION;
 
   // The list only carries a short preview per conversation; load the open thread separately
   const [messageLimit, setMessageLimit] = useState(60);
@@ -241,27 +323,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const existing = conversations.find(
       (c) => c.profileId === profile.id || c.targetName.toLowerCase() === profile.name.toLowerCase()
     );
-    if (existing) {
-      setCurrentConversationId(existing.id);
-      return;
-    }
-
-    const newId = await saveConversationMutation({
-      profileId: profile.id,
-      title: `Wingman Session with ${profile.name}`,
-      targetName: profile.name,
-      relationship: profile.relationship,
-      personalityTraits: profile.personalityTraits,
-      messages: [{ id: `m-init-${profile.id}`, sender: 'ai', text: buildWelcomeMessage(profile) }],
-      currentVibe: 'witty',
-    });
-    setCurrentConversationId(newId);
+    // Switching people never creates a chat on its own (chats count against the free plan);
+    // with no existing thread the default-conversation logic takes over until one is started
+    setCurrentConversationId(existing ? existing.id : null);
   };
 
   const addProfile = async (
     newProf: Omit<TargetProfileModel, 'id' | 'updatedAt'>
   ): Promise<TargetProfileModel> => {
-    const id = await saveProfileMutation(newProf);
+    if (profilesLeft(subscription) <= 0) {
+      showPaywall('profiles');
+      throw new PaywallError('profiles');
+    }
+    const id = await guarded(() => saveProfileMutation(newProf));
     setActiveProfileId(id);
     return { ...newProf, id, updatedAt: new Date().toISOString() };
   };
@@ -290,8 +364,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const assertChatAvailable = () => {
+    if (chatsLeft(subscription) <= 0) {
+      showPaywall('chats');
+      throw new PaywallError('chats');
+    }
+  };
+
   const startNewSession = async () => {
-    const newId = await saveConversationMutation({
+    assertChatAvailable();
+    const newId = await guarded(() => saveConversationMutation({
       profileId: activeProfile.id,
       title: `Chat with ${activeProfile.name}`,
       targetName: activeProfile.name,
@@ -306,7 +388,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         },
       ],
       currentVibe: 'flirty',
-    });
+    }));
     setCurrentConversationId(newId);
   };
 
@@ -317,18 +399,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     vibe: string,
     gender: string = profile.gender
   ) => {
-    const result = await generateRepliesAction({
-      lastMessage,
-      conversationHistory: history,
-      targetName: profile.name,
-      relationship: `${profile.relationship} (refer to them as ${pronoun(gender, 'subject')}/${pronoun(gender, 'object')})`,
-      personalityTraits: profile.personalityTraits,
-      desiredVibe: vibe,
-    });
+    const result = await metered(() =>
+      generateRepliesAction({
+        lastMessage,
+        conversationHistory: history,
+        ...profileContext(profile, gender),
+        desiredVibe: vibe,
+      })
+    );
     return {
       advice: result.advice as string,
       sceneContext: result.sceneContext as string,
-      suggestions: pickTopSuggestions(result.responses, vibe),
+      suggestions: toSuggestions(result.responses),
     };
   };
 
@@ -339,6 +421,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ) => {
     const textPrompt = rawText.trim();
     if (!textPrompt) throw new Error('Enter what they said first.');
+    assertChatAvailable();
     const userMessageText =
       textPrompt.startsWith('She said:') || textPrompt.startsWith('He said:')
         ? textPrompt
@@ -361,7 +444,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       timestamp: 'Just now',
     };
 
-    const newId = await saveConversationMutation({
+    const newId = await guarded(() => saveConversationMutation({
       profileId: profile.id,
       title: `${mode === 'paste' ? 'Pasted chat' : 'Dialogue'} with ${profile.name}`,
       targetName: profile.name,
@@ -369,7 +452,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       personalityTraits: profile.personalityTraits,
       messages: [userMsg, aiMsg].map(serializeMessage),
       currentVibe: 'flirty',
-    });
+    }));
     setCurrentConversationId(newId);
   };
 
@@ -378,6 +461,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     images: string[],
     profile: TargetProfileModel = activeProfile
   ) => {
+    assertChatAvailable();
     const { messages: transcript } = await extractChatAction({ images, targetName: profile.name });
     const lastThem = [...transcript].reverse().find((m) => m.sender === 'them');
     if (!lastThem) {
@@ -402,7 +486,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       timestamp: 'Just now',
     };
 
-    const newId = await saveConversationMutation({
+    const newId = await guarded(() => saveConversationMutation({
       profileId: profile.id,
       title: `Screenshot with ${profile.name}`,
       targetName: profile.name,
@@ -410,7 +494,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       personalityTraits: profile.personalityTraits,
       messages: [...transcriptMsgs, aiMsg].map(serializeMessage),
       currentVibe: 'flirty',
-    });
+    }));
     setCurrentConversationId(newId);
   };
 
@@ -441,24 +525,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Typed messages in the studio are talk with the wingman, not something the other person said
   const chatWithCoach = async (message: string, vibe: string, gender: string = activeProfile.gender) => {
-    const result = await coachChatAction({
-      message,
-      thread: buildCoachThread(currentConversation.messages),
-      targetName: activeProfile.name,
-      relationship: `${activeProfile.relationship} (refer to them as ${pronoun(gender, 'subject')}/${pronoun(gender, 'object')})`,
-      personalityTraits: activeProfile.personalityTraits,
-      desiredVibe: vibe,
-    });
-    const stamp = Date.now();
+    const result = await metered(() =>
+      coachChatAction({
+        message,
+        thread: buildCoachThread(currentConversation.messages),
+        ...profileContext(activeProfile, gender),
+        desiredVibe: vibe,
+      })
+    );
     return {
       advice: result.advice,
       sceneContext: result.sceneContext,
-      suggestions: (result.responses as { category: string; replyText: string; explanation: string }[]).map((r, i) => ({
-        id: `s-${stamp}-${i}`,
-        category: r.category,
-        replyText: r.replyText,
-        toneVariant: r.explanation,
-      })),
+      suggestions: toSuggestions(result.responses),
     };
   };
 
@@ -475,12 +553,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Runs the AI pulse analysis for the open conversation and stores it on the conversation
   const analyzeCurrentConversation = async () => {
     if (!currentConversation.id) return;
-    const analysis = await analyzePulseAction({
-      messages: currentConversation.messages.map((m) => ({ sender: m.sender, text: m.text })),
-      targetName: currentConversation.targetName || activeProfile.name,
-      relationship: currentConversation.relationship || activeProfile.relationship,
-      personalityTraits: currentConversation.personalityTraits,
-    });
+    const analysis = await metered(() =>
+      analyzePulseAction({
+        messages: currentConversation.messages.map((m) => ({ sender: m.sender, text: m.text })),
+        targetName: currentConversation.targetName || activeProfile.name,
+        relationship: currentConversation.relationship || activeProfile.relationship,
+        personalityTraits: currentConversation.personalityTraits,
+      })
+    );
     await saveAnalysisMutation({ id: currentConversation.id as Id<'conversations'>, analysis });
   };
 
@@ -527,11 +607,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const loadEarlierMessages = () => setMessageLimit((n) => n + 60);
 
   const upgradePlan = async (plan: 'plus' | 'pro') => {
-    await setSubscriptionMutation({ plan, creditsRemaining: 9999, unlimited: true });
+    await setPlanMutation({ plan });
+    hidePaywall();
   };
 
-  const useCredit = async (): Promise<boolean> => {
-    return await useCreditMutation({});
+  const changePlan = async (plan: 'free' | 'plus' | 'pro') => {
+    await setPlanMutation({ plan });
+  };
+
+  const deleteConversation = async (id: string) => {
+    await deleteConversationMutation({ id: id as Id<'conversations'> });
+    if (currentConversationId === id) setCurrentConversationId(null);
   };
 
   const saveDisplayName = async (name: string) => {
@@ -563,12 +649,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         swapSides,
         analyzeCurrentConversation,
         loadConversation,
+        deleteConversation,
         updateMessages,
         updateVibe,
         hasMoreMessages,
         loadEarlierMessages,
         upgradePlan,
-        useCredit,
+        changePlan,
+        paywallVisible: paywall.visible,
+        paywallReason: paywall.reason,
+        showPaywall,
+        hidePaywall,
       }}
     >
       {children}

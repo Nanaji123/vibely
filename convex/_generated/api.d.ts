@@ -12,6 +12,7 @@ import type * as ai from "../ai.js";
 import type * as auth from "../auth.js";
 import type * as conversations from "../conversations.js";
 import type * as http from "../http.js";
+import type * as plans from "../plans.js";
 import type * as profiles from "../profiles.js";
 import type * as subscriptions from "../subscriptions.js";
 import type * as userProfiles from "../userProfiles.js";
@@ -27,6 +28,7 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   conversations: typeof conversations;
   http: typeof http;
+  plans: typeof plans;
   profiles: typeof profiles;
   subscriptions: typeof subscriptions;
   userProfiles: typeof userProfiles;

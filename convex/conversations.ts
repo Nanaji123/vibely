@@ -3,6 +3,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { authComponent } from "./auth";
+import { assertCanCreateChat } from "./subscriptions";
 import { messageObject, analysisObject } from "./schema";
 
 const DEFAULT_PAGE = 60;
@@ -168,6 +169,7 @@ export const saveConversation = mutation({
   },
   handler: async (ctx, args) => {
     const user = await authComponent.getAuthUser(ctx);
+    await assertCanCreateChat(ctx, user._id);
     const now = new Date().toISOString();
     const { messages, ...rest } = args;
     const conversationId = await ctx.db.insert("conversations", {

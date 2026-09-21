@@ -19,11 +19,14 @@ import * as Clipboard from 'expo-clipboard';
 import { Palette } from '../theme/colors';
 import { ThemeShadows } from '../theme/shadows';
 import { TargetProfileModel } from '../domain/index';
+import { PaywallError } from '../context/AppContext';
 
 const MAX_SCREENSHOTS = 4;
 
 interface NewSessionFlowScreenProps {
   activeProfile: TargetProfileModel;
+  // When Home already chose the method, the picker step is skipped
+  initialMethod?: 'screenshot' | 'paste';
   onBack: () => void;
   onStartNewSession: () => Promise<void>;
   onCreateCustomSession: (
@@ -37,14 +40,15 @@ interface NewSessionFlowScreenProps {
 
 export const NewSessionFlowScreen: React.FC<NewSessionFlowScreenProps> = ({
   activeProfile,
+  initialMethod,
   onBack,
   onStartNewSession,
   onCreateCustomSession,
   onCreateScreenshotSession,
   onOpenStudio,
 }) => {
-  const [step, setStep] = useState<1 | 2>(1);
-  const [method, setMethod] = useState<'screenshot' | 'paste' | 'type'>('screenshot');
+  const [step, setStep] = useState<1 | 2>(initialMethod ? 2 : 1);
+  const [method, setMethod] = useState<'screenshot' | 'paste' | 'type'>(initialMethod ?? 'screenshot');
   const [pasteText, setPasteText] = useState('');
   const [imageUris, setImageUris] = useState<string[]>([]);
   const [imageData, setImageData] = useState<string[]>([]);
@@ -67,13 +71,14 @@ export const NewSessionFlowScreen: React.FC<NewSessionFlowScreenProps> = ({
   }));
 
   // Handle Android Back Gesture
+  const goBack = () => {
+    if (step === 2 && !initialMethod) setStep(1);
+    else onBack();
+  };
+
   useEffect(() => {
     const onBackPress = () => {
-      if (step === 2) {
-        setStep(1);
-        return true;
-      }
-      onBack();
+      goBack();
       return true;
     };
 
@@ -104,6 +109,10 @@ export const NewSessionFlowScreen: React.FC<NewSessionFlowScreenProps> = ({
     } catch (e) {}
   };
 
+  useEffect(() => {
+    if (initialMethod === 'screenshot') handlePickImage();
+  }, []);
+
   const handleRemoveImage = (indexToRemove: number) => {
     setImageUris(prev => prev.filter((_, idx) => idx !== indexToRemove));
     setImageData(prev => prev.filter((_, idx) => idx !== indexToRemove));
@@ -130,6 +139,7 @@ export const NewSessionFlowScreen: React.FC<NewSessionFlowScreenProps> = ({
       }
       onOpenStudio();
     } catch (err) {
+      if (err instanceof PaywallError) return;
       Alert.alert('Could not analyze', err instanceof Error ? err.message : 'Please try again.');
     } finally {
       setIsAnalyzing(false);
@@ -148,29 +158,22 @@ export const NewSessionFlowScreen: React.FC<NewSessionFlowScreenProps> = ({
     <View style={styles.container}>
       {/* PROFESSIONAL TOP HEADER */}
       <View style={styles.headerBar}>
-        <TouchableOpacity
-          style={styles.backBtn}
-          onPress={() => {
-            if (step === 2) {
-              setStep(1);
-            } else {
-              onBack();
-            }
-          }}
-          activeOpacity={0.7}
-        >
+        <TouchableOpacity style={styles.backBtn} onPress={goBack} activeOpacity={0.7}>
           <Feather name="arrow-left" size={20} color={Palette.zinc900} />
-          <Text style={styles.backBtnText}>
-            {step === 2 ? 'Back' : 'Back'}
-          </Text>
+          <Text style={styles.backBtnText}>Back</Text>
         </TouchableOpacity>
 
         <View style={styles.headerTitleCenter}>
-          <Text style={styles.headerNavTitle}>New Wingman Session</Text>
+          <Text style={styles.headerNavTitle}>
+            {step === 1 ? 'New chat' : method === 'screenshot' ? 'Screenshots' : 'Paste chat'}
+          </Text>
         </View>
 
-        <View style={styles.stepBadge}>
-          <Text style={styles.stepBadgeText}>STEP {step} OF 2</Text>
+        <View style={styles.headerTargetPill}>
+          <Text style={styles.headerTargetEmoji}>{activeProfile?.avatarEmoji || '❤️'}</Text>
+          <Text style={styles.headerTargetName} numberOfLines={1}>
+            {targetName}
+          </Text>
         </View>
       </View>
 
@@ -180,9 +183,9 @@ export const NewSessionFlowScreen: React.FC<NewSessionFlowScreenProps> = ({
           {step === 1 && (
             <View style={styles.stepContainer}>
               <View style={styles.titleSection}>
-                <Text style={styles.stepTitle}>Share Conversation Context</Text>
+                <Text style={styles.stepTitle}>Show me the chat</Text>
                 <Text style={styles.stepSub}>
-                  Select how you want to provide your recent chat dialogue to AI Wingman.
+                  Pick the fastest way to share what {targetName} said.
                 </Text>
 
                 {/* TARGET PROFILE CONTEXT CARD */}
@@ -289,11 +292,11 @@ export const NewSessionFlowScreen: React.FC<NewSessionFlowScreenProps> = ({
                 /* SCREENSHOTS GALLERY GRID & SUBMISSION */
                 <View>
                   <View style={styles.titleSection}>
-                    <Text style={styles.stepTitle}>Selected Screenshots</Text>
+                    <Text style={styles.stepTitle}>Your screenshots</Text>
                     <Text style={styles.stepSub}>
                       {imageUris.length > 0
-                        ? `${imageUris.length} screenshot${imageUris.length > 1 ? 's' : ''} ready for AI Vision parsing.`
-                        : 'No screenshots selected yet.'}
+                        ? `${imageUris.length} of ${MAX_SCREENSHOTS} added. Latest messages last.`
+                        : 'Add up to 4 screenshots of the chat.'}
                     </Text>
                   </View>
 
@@ -360,7 +363,7 @@ export const NewSessionFlowScreen: React.FC<NewSessionFlowScreenProps> = ({
                     ) : (
                       <>
                         <Text style={styles.submitBtnText}>
-                          Analyze {imageUris.length} Screenshot{imageUris.length > 1 ? 's' : ''} with AI
+                          Read the chat
                         </Text>
                         <Feather name="zap" size={18} color="#ffffff" />
                       </>
@@ -371,9 +374,9 @@ export const NewSessionFlowScreen: React.FC<NewSessionFlowScreenProps> = ({
                 /* PASTE TEXT INPUT STEP */
                 <View>
                   <View style={styles.titleSection}>
-                    <Text style={styles.stepTitle}>Paste {targetName}'s Message</Text>
+                    <Text style={styles.stepTitle}>What did {targetName} say?</Text>
                     <Text style={styles.stepSub}>
-                      Enter or paste the exact text received from {targetName}.
+                      Paste their message, or the last few lines of the chat.
                     </Text>
                   </View>
 
@@ -416,7 +419,7 @@ export const NewSessionFlowScreen: React.FC<NewSessionFlowScreenProps> = ({
                     ) : (
                       <>
                         <Text style={styles.submitBtnText}>
-                          Analyze Dialogue with AI Wingman
+                          Get replies
                         </Text>
                         <Feather name="zap" size={18} color="#ffffff" />
                       </>
@@ -468,6 +471,25 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: Palette.zinc900,
     letterSpacing: -0.2,
+  },
+  headerTargetPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: Palette.zinc100,
+    paddingHorizontal: 9,
+    height: 30,
+    borderRadius: 999,
+    maxWidth: 120,
+  },
+  headerTargetEmoji: {
+    fontSize: 13,
+  },
+  headerTargetName: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Palette.zinc900,
+    flexShrink: 1,
   },
   stepBadge: {
     backgroundColor: Palette.indigo50,

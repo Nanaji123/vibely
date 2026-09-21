@@ -1,273 +1,395 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withRepeat,
-  withSequence,
-  withTiming,
-  cancelAnimation,
-} from 'react-native-reanimated';
-import { useIsFocused } from '@react-navigation/native';
+import React, { useState } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Modal, Pressable } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Feather } from '@expo/vector-icons';
-import { Palette, ThemeColors } from '../theme/colors';
+import { Palette } from '../theme/colors';
 import { ThemeShadows } from '../theme/shadows';
-import { UserSubscriptionModel } from '../domain/index';
+import { UserSubscriptionModel, PaywallReason, isUnlimited } from '../domain/index';
+import { useApp } from '../context/AppContext';
 
-interface PaywallScreenProps {
+type PlanId = 'plus' | 'pro';
+
+const PLANS: {
+  id: PlanId;
+  name: string;
+  price: string;
+  tagline: string;
+  badge?: string;
+  features: string[];
+}[] = [
+  {
+    id: 'plus',
+    name: 'Plus',
+    price: '$6.99',
+    tagline: 'Everyday wingman',
+    badge: 'MOST POPULAR',
+    features: ['Unlimited replies & coaching', 'Screenshot chat reader', 'All vibes & tones', 'Conversation Pulse'],
+  },
+  {
+    id: 'pro',
+    name: 'Pro',
+    price: '$12.99',
+    tagline: 'Full conversation coach',
+    features: ['Everything in Plus', 'Unlimited people profiles', 'Next-turn predictions', 'Priority AI speed'],
+  },
+];
+
+interface PaywallProps {
   subscription: UserSubscriptionModel;
-  onUpgrade: (plan: 'plus' | 'pro') => void;
+  reason?: PaywallReason;
+  onUpgrade: (plan: PlanId) => void;
+  onClose?: () => void;
 }
 
-export const PaywallScreen: React.FC<PaywallScreenProps> = ({
-  subscription,
-  onUpgrade,
-}) => {
-  const [selectedPlan, setSelectedPlan] = useState<'plus' | 'pro'>('plus');
-  const entranceAnim = useSharedValue(0);
-  const pulseAnim = useSharedValue(1);
+const COPY: Record<PaywallReason, { title: string; sub: string }> = {
+  messages: { title: "You've used your free replies", sub: 'Go unlimited to keep the conversation moving.' },
+  chats: { title: "You've used your free chats", sub: 'Unlimited chats with everyone you’re texting.' },
+  profiles: { title: 'Add more people', sub: 'Your plan has hit its people limit. Upgrade to add more.' },
+  upsell: { title: 'Never get stuck on what to say', sub: 'Unlimited replies, screenshot reading and next-turn predictions.' },
+};
 
-  const isFocused = useIsFocused();
-
-  useEffect(() => {
-    entranceAnim.value = withTiming(1, { duration: 350 });
-  }, []);
-
-  // Tabs stay mounted when unfocused; only run the CTA pulse while this tab is visible
-  useEffect(() => {
-    if (isFocused) {
-      pulseAnim.value = withRepeat(
-        withSequence(withTiming(1.02, { duration: 900 }), withTiming(1, { duration: 900 })),
-        -1
-      );
-    } else {
-      cancelAnimation(pulseAnim);
-      pulseAnim.value = 1;
-    }
-  }, [isFocused]);
-
-  const entranceStyle = useAnimatedStyle(() => ({ opacity: entranceAnim.value }));
-  const pulseStyle = useAnimatedStyle(() => ({ transform: [{ scale: pulseAnim.value }] }));
+// Sheet body: usable inside the modal below or on its own
+export const PaywallScreen: React.FC<PaywallProps> = ({ subscription, reason = 'upsell', onUpgrade, onClose }) => {
+  const paid = isUnlimited(subscription);
+  const [selectedPlan, setSelectedPlan] = useState<PlanId>(subscription.plan === 'plus' ? 'pro' : 'plus');
+  const copy = COPY[reason];
+  const meters = [
+    subscription.messagesLimit !== null && { label: 'replies', used: subscription.messagesUsed, limit: subscription.messagesLimit },
+    subscription.chatsLimit !== null && { label: 'chats', used: subscription.chatsUsed, limit: subscription.chatsLimit },
+  ].filter(Boolean) as { label: string; used: number; limit: number }[];
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Animated.View style={entranceStyle}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.badge}>
-          <Feather name="zap" size={12} color="#ffffff" />
-          <Text style={styles.badgeText}>VIBELY PRO</Text>
+    <View style={styles.sheet}>
+      <LinearGradient colors={['#18181b', '#312e81']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
+        <View style={styles.heroTopRow}>
+          <View style={styles.heroBadge}>
+            <Feather name="zap" size={11} color="#ffffff" />
+            <Text style={styles.heroBadgeText}>VIBELY PRO</Text>
+          </View>
+          {onClose ? (
+            <TouchableOpacity onPress={onClose} style={styles.closeBtn} hitSlop={10} accessibilityLabel="Close">
+              <Feather name="x" size={18} color="#ffffff" />
+            </TouchableOpacity>
+          ) : null}
         </View>
-        <Text style={styles.title}>Never Get Stuck On What To Say</Text>
-        <Text style={styles.subtitle}>
-          Unlock unlimited conversation analyses, vision screenshot parsing & multi-turn dialog trees.
-        </Text>
-      </View>
+        <Text style={styles.heroTitle}>{paid && reason === 'upsell' ? `You're on Vibely ${subscription.plan === 'pro' ? 'Pro' : 'Plus'}` : copy.title}</Text>
+        <Text style={styles.heroSub}>{paid && reason === 'upsell' ? 'Unlimited replies and chats. Thanks for the support.' : copy.sub}</Text>
 
-      {/* Plan Selector Cards */}
-      <View style={styles.cardsContainer}>
-        {/* Plus Plan ($6.99) */}
-        <TouchableOpacity
-          style={[styles.planCard, selectedPlan === 'plus' && styles.planCardActive]}
-          onPress={() => setSelectedPlan('plus')}
-          activeOpacity={0.85}
-        >
-          <View style={styles.popularBadge}>
-            <Text style={styles.popularText}>MOST POPULAR</Text>
+        {meters.length > 0 ? (
+          <View style={styles.meters}>
+            {meters.map((m) => (
+              <View key={m.label} style={styles.meter}>
+                <View style={styles.meterTrack}>
+                  <View style={[styles.meterFill, { width: `${Math.min(100, (m.used / m.limit) * 100)}%` }]} />
+                </View>
+                <Text style={styles.meterText}>
+                  {Math.min(m.used, m.limit)} of {m.limit} free {m.label} used
+                </Text>
+              </View>
+            ))}
           </View>
+        ) : null}
+      </LinearGradient>
 
-          <View style={styles.cardTop}>
-            <View>
-              <Text style={styles.planName}>Plus</Text>
-              <Text style={styles.planSub}>Everyday conversation wingman</Text>
-            </View>
-            <Text style={styles.price}>
-              $6.99<Text style={styles.perMonth}>/mo</Text>
+      <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent} bounces={false}>
+        {PLANS.map((plan) => {
+          const current = subscription.plan === plan.id;
+          const active = selectedPlan === plan.id && !current;
+          return (
+            <TouchableOpacity
+              key={plan.id}
+              style={[styles.planCard, active && styles.planCardActive, current && styles.planCardCurrent]}
+              onPress={() => !current && setSelectedPlan(plan.id)}
+              activeOpacity={current ? 1 : 0.9}
+            >
+              <View style={styles.planTop}>
+                <View style={styles.planRadio}>
+                  <View style={[styles.radioOuter, active && styles.radioOuterActive]}>
+                    {active ? <View style={styles.radioInner} /> : null}
+                  </View>
+                  <View>
+                    <View style={styles.planNameRow}>
+                      <Text style={styles.planName}>{plan.name}</Text>
+                      {current ? (
+                        <View style={[styles.popularBadge, styles.currentBadge]}>
+                          <Text style={styles.popularText}>CURRENT</Text>
+                        </View>
+                      ) : plan.badge ? (
+                        <View style={styles.popularBadge}>
+                          <Text style={styles.popularText}>{plan.badge}</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                    <Text style={styles.planTagline}>{plan.tagline}</Text>
+                  </View>
+                </View>
+                <Text style={styles.price}>
+                  {plan.price}
+                  <Text style={styles.perMonth}>/mo</Text>
+                </Text>
+              </View>
+              <View style={styles.features}>
+                {plan.features.map((f) => (
+                  <View key={f} style={styles.featureRow}>
+                    <Feather name="check" size={13} color={active ? Palette.indigo600 : Palette.zinc500} />
+                    <Text style={styles.featureText}>{f}</Text>
+                  </View>
+                ))}
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+
+        {subscription.plan !== 'pro' ? (
+          <TouchableOpacity style={styles.cta} onPress={() => onUpgrade(selectedPlan)} activeOpacity={0.88}>
+            <Text style={styles.ctaText}>
+              {subscription.plan === 'plus' ? 'Upgrade to Pro' : `Continue with ${selectedPlan === 'plus' ? 'Plus' : 'Pro'}`}
             </Text>
-          </View>
+            <Feather name="arrow-right" size={16} color="#ffffff" />
+          </TouchableOpacity>
+        ) : null}
+        {onClose ? (
+          <TouchableOpacity onPress={onClose} style={styles.laterBtn} activeOpacity={0.7}>
+            <Text style={styles.laterText}>{reason === 'upsell' ? 'Maybe later' : 'Not now'}</Text>
+          </TouchableOpacity>
+        ) : null}
+        <Text style={styles.fineprint}>Cancel anytime · 7-day refund guarantee</Text>
+      </ScrollView>
+    </View>
+  );
+};
 
-          <View style={styles.featuresList}>
-            <Text style={styles.featureItem}>✓ Unlimited conversation analyses</Text>
-            <Text style={styles.featureItem}>✓ 📸 Screenshot OCR chat parser</Text>
-            <Text style={styles.featureItem}>✓ All conversation vibes & tones</Text>
-            <Text style={styles.featureItem}>✓ Personality profiles & memory</Text>
-            <Text style={styles.featureItem}>✓ Real-time Sentiment Pulse</Text>
-          </View>
-        </TouchableOpacity>
-
-        {/* Pro Plan ($12.99) */}
-        <TouchableOpacity
-          style={[styles.planCard, selectedPlan === 'pro' && styles.planCardActive]}
-          onPress={() => setSelectedPlan('pro')}
-          activeOpacity={0.85}
-        >
-          <View style={styles.cardTop}>
-            <View>
-              <Text style={styles.planName}>Pro</Text>
-              <Text style={styles.planSub}>Advanced conversation coach</Text>
-            </View>
-            <Text style={styles.price}>
-              $12.99<Text style={styles.perMonth}>/mo</Text>
-            </Text>
-          </View>
-
-          <View style={styles.featuresList}>
-            <Text style={styles.featureItem}>✓ Everything in Plus</Text>
-            <Text style={styles.featureItem}>✓ Unlimited personality profiles</Text>
-            <Text style={styles.featureItem}>✓ Long-term relationship memory</Text>
-            <Text style={styles.featureItem}>✓ Dialog branch prediction simulator</Text>
-            <Text style={styles.featureItem}>✓ Priority AI response speed</Text>
-          </View>
-        </TouchableOpacity>
+// Mounted once at the app root so the paywall can appear over any screen
+export const PaywallSheet: React.FC = () => {
+  const { paywallVisible, paywallReason, hidePaywall, subscription, upgradePlan } = useApp();
+  return (
+    <Modal visible={paywallVisible} animationType="slide" transparent onRequestClose={hidePaywall}>
+      <View style={styles.backdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={hidePaywall} />
+        <PaywallScreen subscription={subscription} reason={paywallReason} onUpgrade={(plan) => upgradePlan(plan)} onClose={hidePaywall} />
       </View>
-
-      {/* CTA Button */}
-      <Animated.View style={pulseStyle}>
-        <TouchableOpacity
-          style={styles.subscribeBtn}
-          onPress={() => onUpgrade(selectedPlan)}
-          activeOpacity={0.88}
-        >
-          <Text style={styles.subscribeBtnText}>
-            Upgrade to {selectedPlan.toUpperCase()}
-          </Text>
-        </TouchableOpacity>
-      </Animated.View>
-
-      <Text style={styles.guaranteeText}>Cancel anytime. 7-day refund guarantee.</Text>
-      </Animated.View>
-    </ScrollView>
+    </Modal>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
+  backdrop: {
     flex: 1,
+    backgroundColor: 'rgba(9,9,11,0.55)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
     backgroundColor: '#ffffff',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    overflow: 'hidden',
+    maxHeight: '92%',
+    ...ThemeShadows.lg,
   },
-  content: {
-    padding: 16,
-    paddingBottom: 110,
+  hero: {
+    paddingHorizontal: 22,
+    paddingTop: 18,
+    paddingBottom: 22,
   },
-  header: {
-    alignItems: 'center',
-    marginBottom: 24,
-    marginTop: 8,
-  },
-  badge: {
+  heroTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Palette.zinc900,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 9999,
-    gap: 4,
-    marginBottom: 10,
+    justifyContent: 'space-between',
+    marginBottom: 16,
   },
-  badgeText: {
+  heroBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+  },
+  heroBadgeText: {
+    color: '#ffffff',
     fontSize: 10,
     fontWeight: '800',
+    letterSpacing: 1,
+  },
+  closeBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroTitle: {
     color: '#ffffff',
-    letterSpacing: 0.8,
-  },
-  title: {
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: '800',
-    color: Palette.zinc900,
-    letterSpacing: -0.4,
-    textAlign: 'center',
-    marginBottom: 6,
+    letterSpacing: -0.5,
+    lineHeight: 30,
   },
-  subtitle: {
-    fontSize: 13,
-    color: Palette.zinc500,
-    textAlign: 'center',
-    lineHeight: 18,
-    paddingHorizontal: 16,
+  heroSub: {
+    color: 'rgba(255,255,255,0.78)',
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 6,
   },
-  cardsContainer: {
-    gap: 16,
-    marginBottom: 24,
+  meters: {
+    marginTop: 18,
+    gap: 12,
+  },
+  meter: {
+    gap: 8,
+  },
+  meterTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    overflow: 'hidden',
+  },
+  meterFill: {
+    height: '100%',
+    backgroundColor: '#ffffff',
+    borderRadius: 3,
+  },
+  meterText: {
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  body: {
+    flexGrow: 0,
+  },
+  bodyContent: {
+    padding: 18,
+    paddingBottom: 34,
+    gap: 12,
   },
   planCard: {
+    borderWidth: 1.5,
+    borderColor: Palette.zinc200,
+    borderRadius: 20,
+    padding: 16,
     backgroundColor: '#ffffff',
-    borderRadius: 14,
-    padding: 18,
-    borderWidth: 2,
-    borderColor: '#e2e8f0',
-    position: 'relative',
-    ...ThemeShadows.sm,
   },
   planCardActive: {
     borderColor: Palette.zinc900,
-    backgroundColor: '#fafafa',
+    backgroundColor: Palette.zinc50,
   },
-  popularBadge: {
-    position: 'absolute',
-    top: -10,
-    right: 16,
-    backgroundColor: Palette.zinc900,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 4,
+  planCardCurrent: {
+    opacity: 0.6,
   },
-  popularText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: '#ffffff',
+  currentBadge: {
+    backgroundColor: Palette.emerald600,
   },
-  cardTop: {
+  planTop: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
+  },
+  planRadio: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 14,
+    gap: 12,
+    flex: 1,
+  },
+  radioOuter: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: Palette.zinc200,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radioOuterActive: {
+    borderColor: Palette.zinc900,
+  },
+  radioInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: Palette.zinc900,
+  },
+  planNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   planName: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '800',
     color: Palette.zinc900,
   },
-  planSub: {
+  popularBadge: {
+    backgroundColor: Palette.indigo600,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  popularText: {
+    color: '#ffffff',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
+  planTagline: {
     fontSize: 12,
     color: Palette.zinc500,
+    marginTop: 2,
   },
   price: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '800',
     color: Palette.zinc900,
+    letterSpacing: -0.5,
   },
   perMonth: {
     fontSize: 12,
-    color: Palette.zinc400,
-    fontWeight: '400',
+    fontWeight: '600',
+    color: Palette.zinc500,
   },
-  featuresList: {
+  features: {
+    marginTop: 12,
     gap: 6,
-    borderTopWidth: 1,
-    borderTopColor: '#f1f5f9',
-    paddingTop: 12,
   },
-  featureItem: {
+  featureRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  featureText: {
     fontSize: 13,
     color: Palette.zinc700,
     fontWeight: '500',
   },
-  subscribeBtn: {
+  cta: {
+    marginTop: 6,
+    height: 54,
+    borderRadius: 16,
     backgroundColor: Palette.zinc900,
-    paddingVertical: 14,
-    borderRadius: 10,
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 10,
-    ...ThemeShadows.sm,
+    justifyContent: 'center',
+    gap: 8,
+    ...ThemeShadows.md,
   },
-  subscribeBtnText: {
-    fontSize: 15,
-    fontWeight: '800',
+  ctaText: {
     color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '800',
   },
-  guaranteeText: {
+  laterBtn: {
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  laterText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Palette.zinc500,
+  },
+  fineprint: {
+    textAlign: 'center',
     fontSize: 11,
     color: Palette.zinc400,
-    textAlign: 'center',
   },
 });

@@ -1,0 +1,10 @@
+# EAS Build ignore file
+# https://docs.expo.dev/build-reference/eas-ignore/
+
+node_modules/
+.expo/
+dist/
+web-build/
+.git/
+*.log
+.env*.local

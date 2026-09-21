@@ -9,10 +9,10 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.vibely.app"
+      "bundleIdentifier": "com.nanaji.vibely"
     },
     "android": {
-      "package": "com.vibely.app",
+      "package": "com.nanaji.vibely",
       "adaptiveIcon": {
         "backgroundColor": "#0b0d17",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -24,6 +24,11 @@
     "plugins": [
       "expo-secure-store",
       "expo-web-browser"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "c14ee3bf-88a9-42b7-b8fa-568c5416b09b"
+      }
+    }
   }
 }

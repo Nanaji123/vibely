@@ -1,6 +1,7 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { authComponent } from "./auth";
+import { assertCanCreateProfile } from "./subscriptions";
 
 export const listProfiles = query({
   args: {},
@@ -27,6 +28,7 @@ export const saveProfile = mutation({
   },
   handler: async (ctx, args) => {
     const user = await authComponent.getAuthUser(ctx);
+    await assertCanCreateProfile(ctx, user._id);
     const now = new Date().toISOString();
     return await ctx.db.insert("profiles", {
       ...args,

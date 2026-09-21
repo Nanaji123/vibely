@@ -4,7 +4,6 @@ export type MainTabParamList = {
   Home: undefined;
   Pulse: undefined;
   Profiles: undefined;
-  Pro: undefined;
 };
 
 export type RootStackParamList = {
@@ -13,5 +12,6 @@ export type RootStackParamList = {
   Onboarding: undefined;
   Main: NavigatorScreenParams<MainTabParamList> | undefined;
   Studio: { conversationId?: string } | undefined;
-  NewSessionFlow: undefined;
+  NewSessionFlow: { method?: 'screenshot' | 'paste' } | undefined;
+  History: undefined;
 };

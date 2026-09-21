@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -7,15 +7,17 @@ import {
   Modal,
   ScrollView,
   Switch,
+  Alert,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Palette, ThemeColors } from '../../theme/colors';
 import { ThemeShadows } from '../../theme/shadows';
-import { ConversationModel } from '../../domain/index';
+import { ConversationModel, isUnlimited, messagesLeft, chatsLeft } from '../../domain/index';
 import { useApp } from '../../context/AppContext';
 import { authClient } from '../../lib/authClient';
+import { readLocal, writeLocal } from '../../lib/localStore';
 import type { RootStackParamList } from '../../navigation/types';
 
 export interface WingmanNotification {
@@ -40,7 +42,7 @@ const formatAgo = (ms: number) => {
 
 export const TopBar: React.FC = () => {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const { activeProfile, profiles, subscription, conversations, selectProfile, loadConversation, account } = useApp();
+  const { activeProfile, profiles, subscription, conversations, selectProfile, loadConversation, account, showPaywall, changePlan } = useApp();
 
   const accountName = account?.displayName || account?.googleName || 'Vibely user';
   const accountEmail = account?.email ?? '';
@@ -53,7 +55,6 @@ export const TopBar: React.FC = () => {
       .join('') || 'V';
 
   const onSelectProfile = selectProfile;
-  const onOpenPro = () => navigation.navigate('Main', { screen: 'Pro' });
   const onLogout = () => authClient.signOut();
   const onOpenConversation = (conv: ConversationModel) => {
     loadConversation(conv);
@@ -65,12 +66,31 @@ export const TopBar: React.FC = () => {
   const [showUserProfileModal, setShowUserProfileModal] = useState(false);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
 
-  // Notification Preferences Toggles
+  // Notification preferences and read state persist per device
   const [prefFollowups, setPrefFollowups] = useState(true);
   const [prefSignals, setPrefSignals] = useState(true);
-
-  // Alerts are derived from the user's real conversations (no seeded data)
   const [readIds, setReadIds] = useState<Set<string>>(new Set());
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const saved = await readLocal<{ followups: boolean; signals: boolean; read: string[] }>('vibely.alerts', {
+        followups: true,
+        signals: true,
+        read: [],
+      });
+      setPrefFollowups(saved.followups);
+      setPrefSignals(saved.signals);
+      setReadIds(new Set(saved.read));
+      setHydrated(true);
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    // Keep only the newest ids so the value stays small
+    writeLocal('vibely.alerts', { followups: prefFollowups, signals: prefSignals, read: [...readIds].slice(-60) });
+  }, [hydrated, prefFollowups, prefSignals, readIds]);
 
   const allNotifications = useMemo<WingmanNotification[]>(() => {
     const now = Date.now();
@@ -109,7 +129,7 @@ export const TopBar: React.FC = () => {
   const notifications = allNotifications.filter(
     (n) => (n.type === 'followup' ? prefFollowups : prefSignals)
   );
-  const unreadCount = notifications.filter((n) => n.isUnread).length;
+  const unreadCount = hydrated ? notifications.filter((n) => n.isUnread).length : 0;
 
   const hasProfiles = profiles.length > 0;
   const genderBadge =
@@ -121,7 +141,8 @@ export const TopBar: React.FC = () => {
   };
 
   // Open conversation from notification
-  const handleNotificationClick = (targetName: string) => {
+  const handleNotificationClick = (id: string, targetName: string) => {
+    setReadIds((prev) => new Set(prev).add(id));
     setShowNotificationsModal(false);
     const matchedConv = conversations.find(
       c => c.targetName.toLowerCase() === targetName.toLowerCase()
@@ -238,23 +259,51 @@ export const TopBar: React.FC = () => {
                     </Text>
                   </View>
                   <View style={styles.planStatusBadge}>
-                    <Text style={styles.planStatusText}>
-                      {subscription.unlimited ? 'UNLIMITED' : `${subscription.creditsRemaining} CREDITS`}
-                    </Text>
+                    <Text style={styles.planStatusText}>{isUnlimited(subscription) ? 'UNLIMITED' : 'FREE'}</Text>
                   </View>
                 </View>
 
-                <TouchableOpacity
-                  style={styles.upgradePlanBtn}
-                  onPress={() => {
-                    setShowUserProfileModal(false);
-                    onOpenPro();
-                  }}
-                  activeOpacity={0.85}
-                >
-                  <Feather name="zap" size={13} color="#ffffff" />
-                  <Text style={styles.upgradePlanBtnText}>Manage / Upgrade Plan</Text>
-                </TouchableOpacity>
+                <Text style={styles.planUsageText}>
+                  {isUnlimited(subscription)
+                    ? `Renews ${subscription.renewsAt ? new Date(subscription.renewsAt).toLocaleDateString() : 'monthly'} · unlimited replies and chats`
+                    : `${messagesLeft(subscription)} of ${subscription.messagesLimit} replies · ${chatsLeft(subscription)} of ${subscription.chatsLimit} chats left`}
+                </Text>
+
+                {subscription.plan !== 'pro' ? (
+                  <TouchableOpacity
+                    style={styles.upgradePlanBtn}
+                    onPress={() => {
+                      setShowUserProfileModal(false);
+                      showPaywall('upsell');
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    <Feather name="zap" size={13} color="#ffffff" />
+                    <Text style={styles.upgradePlanBtnText}>{subscription.plan === 'plus' ? 'Upgrade to Pro' : 'See plans'}</Text>
+                  </TouchableOpacity>
+                ) : null}
+
+                {isUnlimited(subscription) ? (
+                  <View style={styles.planActionsRow}>
+                    {subscription.plan === 'pro' ? (
+                      <TouchableOpacity style={styles.planSecondaryBtn} onPress={() => changePlan('plus')} activeOpacity={0.8}>
+                        <Text style={styles.planSecondaryText}>Switch to Plus</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                    <TouchableOpacity
+                      style={styles.planSecondaryBtn}
+                      onPress={() =>
+                        Alert.alert('Cancel plan?', 'You will go back to the free plan with its limits.', [
+                          { text: 'Keep plan', style: 'cancel' },
+                          { text: 'Cancel plan', style: 'destructive', onPress: () => changePlan('free') },
+                        ])
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[styles.planSecondaryText, { color: '#dc2626' }]}>Cancel plan</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
               </View>
 
               {/* Notification Preferences Section */}
@@ -266,9 +315,9 @@ export const TopBar: React.FC = () => {
                   <View style={styles.toggleLeft}>
                     <Feather name="clock" size={15} color={Palette.indigo600} />
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.toggleTitle}>Stale Chat Follow-up Nudges</Text>
+                      <Text style={styles.toggleTitle}>Follow-up nudges</Text>
                       <Text style={styles.toggleSub}>
-                        Alerts when it's been &gt;24h so they don't think you lost interest
+                        Remind you when a chat has gone quiet for over 24 hours
                       </Text>
                     </View>
                   </View>
@@ -285,9 +334,9 @@ export const TopBar: React.FC = () => {
                   <View style={styles.toggleLeft}>
                     <Feather name="activity" size={15} color={Palette.emerald600} />
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.toggleTitle}>Interest Spike Notifications</Text>
+                      <Text style={styles.toggleTitle}>High-interest signals</Text>
                       <Text style={styles.toggleSub}>
-                        Nudge to strike when they reply in under 3 minutes
+                        Alert when a Pulse analysis shows their interest at 75% or higher
                       </Text>
                     </View>
                   </View>
@@ -358,7 +407,7 @@ export const TopBar: React.FC = () => {
                 <TouchableOpacity
                   key={n.id}
                   style={[styles.notifItemCard, n.isUnread && styles.notifItemUnread]}
-                  onPress={() => handleNotificationClick(n.targetName)}
+                  onPress={() => handleNotificationClick(n.id, n.targetName)}
                   activeOpacity={0.85}
                 >
                   <View style={styles.notifItemTop}>
@@ -632,6 +681,32 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
     color: Palette.emerald600,
+  },
+  planUsageText: {
+    fontSize: 12,
+    color: Palette.zinc500,
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  planActionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  planSecondaryBtn: {
+    flex: 1,
+    height: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Palette.zinc200,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+  },
+  planSecondaryText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Palette.zinc700,
   },
   upgradePlanBtn: {
     flexDirection: 'row',

@@ -121,8 +121,13 @@ export default defineSchema({
   userSubscriptions: defineTable({
     userId: v.string(),
     plan: v.union(v.literal("free"), v.literal("plus"), v.literal("pro")),
-    creditsRemaining: v.number(),
+    // Legacy counter (credits left out of 5); superseded by messagesUsed
+    creditsRemaining: v.optional(v.number()),
     unlimited: v.boolean(),
+    // AI generations used on the free plan
+    messagesUsed: v.optional(v.number()),
+    // End of the current paid period; absent on free
+    renewsAt: v.optional(v.string()),
     updatedAt: v.string(),
   }).index("by_userId", ["userId"]),
 });

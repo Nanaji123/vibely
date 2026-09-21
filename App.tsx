@@ -8,6 +8,7 @@ import { ConvexBetterAuthProvider, type AuthClient } from '@convex-dev/better-au
 import { authClient } from './src/lib/authClient';
 import { AppProvider } from './src/context/AppContext';
 import { RootNavigator } from './src/navigation/RootNavigator';
+import { PaywallSheet } from './src/screens/PaywallScreen';
 
 LogBox.ignoreLogs(['"shadow*" style props are deprecated']);
 
@@ -32,6 +33,7 @@ export default function App() {
             <NavigationContainer theme={NavigationTheme}>
               <RootNavigator />
             </NavigationContainer>
+            <PaywallSheet />
           </AppProvider>
         </ConvexBetterAuthProvider>
       </SafeAreaProvider>

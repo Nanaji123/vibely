@@ -31,7 +31,12 @@ import {
   TargetProfileModel,
   SuggestionOptionModel,
   DialogTreeNodeModel,
+  UserSubscriptionModel,
+  PaywallReason,
+  isUnlimited,
+  messagesLeft,
 } from '../domain/index';
+import { PaywallError } from '../context/AppContext';
 
 interface ChatStudioScreenProps {
   activeProfile: TargetProfileModel;
@@ -54,6 +59,8 @@ interface ChatStudioScreenProps {
   onGenerateBranches: (reply: string) => Promise<DialogTreeNodeModel[]>;
   onExtractChat: (images: string[]) => Promise<{ sender: 'you' | 'them'; text: string }[]>;
   onSwapSides: (ids: string[]) => Promise<void>;
+  subscription?: UserSubscriptionModel;
+  onOpenPaywall?: (reason: PaywallReason) => void;
 }
 
 type ListItem =
@@ -284,6 +291,8 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
   onGenerateBranches,
   onExtractChat,
   onSwapSides,
+  subscription,
+  onOpenPaywall,
 }) => {
   const [inputText, setInputText] = useState('');
   const [selectedGenre, setSelectedGenre] = useState<string>('flirty');
@@ -304,21 +313,11 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
   const [branchLoading, setBranchLoading] = useState(false);
 
   const scrollViewRef = useRef<FlatList<ListItem>>(null);
-  const isInitialScrollDone = useRef(false);
   const thinkingPulseAnim = useSharedValue(1);
 
   // Always holds the latest props/state so memoized handlers stay referentially stable
   const latest = useRef({ messages, onUpdateMessages, onGenerateBranches, name: activeProfile.name, targetGender });
   latest.current = { messages, onUpdateMessages, onGenerateBranches, name: activeProfile.name, targetGender };
-
-  // Keep snapping to the bottom while the list lays out its first batches, then stop
-  useEffect(() => {
-    isInitialScrollDone.current = false;
-    const timer = setTimeout(() => {
-      isInitialScrollDone.current = true;
-    }, 700);
-    return () => clearTimeout(timer);
-  }, [activeProfile.id]);
 
   useEffect(() => {
     if (isAiThinking) {
@@ -373,7 +372,7 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
     base: ChatMessageModel[]
   ) => {
     setIsAiThinking(true);
-    setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+    setTimeout(() => scrollViewRef.current?.scrollToOffset({ offset: 0, animated: true }), 100);
     return request()
       .then((coachResp) => {
         const aiMsg: ChatMessageModel = {
@@ -387,11 +386,13 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
         onUpdateMessages([...base, aiMsg]);
       })
       .catch((err) => {
+        // The paywall sheet already explains a PaywallError
+        if (err instanceof PaywallError) return;
         Alert.alert('Vibely AI could not answer', err instanceof Error ? err.message : 'Please try again.');
       })
       .finally(() => {
         setIsAiThinking(false);
-        setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 150);
+        setTimeout(() => scrollViewRef.current?.scrollToOffset({ offset: 0, animated: true }), 150);
       });
   };
 
@@ -453,7 +454,7 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
       setIsAiThinking(false);
 
       setTimeout(() => {
-        scrollViewRef.current?.scrollToEnd({ animated: true });
+        scrollViewRef.current?.scrollToOffset({ offset: 0, animated: true });
       }, 150);
     }, 400);
   }, []);
@@ -469,13 +470,35 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
     setTimeout(() => setCopiedId(null), 2000);
   }, []);
 
-  // Open Branching Next Turn Preview
+  // Free plan: one soft nudge toward the plans once half the replies are gone; hard stop comes from the backend
+  const upsellShown = useRef(false);
+  const freeRepliesLeft = subscription && !isUnlimited(subscription) ? messagesLeft(subscription) : null;
+  useEffect(() => {
+    if (!subscription || !onOpenPaywall || isUnlimited(subscription) || upsellShown.current) return;
+    const limit = subscription.messagesLimit ?? 0;
+    if (limit > 0 && subscription.messagesUsed === Math.ceil(limit / 2)) {
+      upsellShown.current = true;
+      const t = setTimeout(() => onOpenPaywall('upsell'), 900);
+      return () => clearTimeout(t);
+    }
+  }, [subscription?.messagesUsed]);
+
+  // Open Branching Next Turn Preview. Predictions are kept per suggestion so reopening one is instant
+  const branchCache = useRef<Map<string, DialogTreeNodeModel[]>>(new Map());
   const handleOpenBranching = useCallback(async (option: SuggestionOptionModel) => {
     setBranchingReply(option);
+    const cached = branchCache.current.get(option.id);
+    if (cached) {
+      setBranchScenarios(cached);
+      setBranchLoading(false);
+      return;
+    }
     setBranchScenarios([]);
     setBranchLoading(true);
     try {
-      setBranchScenarios(await latest.current.onGenerateBranches(option.replyText));
+      const nodes = await latest.current.onGenerateBranches(option.replyText);
+      branchCache.current.set(option.id, nodes);
+      setBranchScenarios(nodes);
     } catch (err) {
       setBranchingReply(null);
       Alert.alert('Could not predict replies', err instanceof Error ? err.message : 'Please try again.');
@@ -484,7 +507,41 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
     }
   }, []);
 
-  const items = useMemo(() => buildItems(messages), [messages]);
+  const handleCopyBranch = useCallback(async (node: DialogTreeNodeModel) => {
+    try {
+      await Clipboard.setStringAsync(node.suggestedReply);
+    } catch (e) {
+      // clipboard unavailable: still show the confirmation state
+    }
+    setCopiedId(node.id);
+    setTimeout(() => setCopiedId(null), 2000);
+  }, []);
+
+  // Drops the follow-up move into the chat as a Wingman card so it can be copied, branched or marked as sent later
+  const handleAddBranchToChat = useCallback((node: DialogTreeNodeModel) => {
+    const { messages: current, onUpdateMessages: update, name } = latest.current;
+    const stamp = Date.now();
+    const aiMsg: ChatMessageModel = {
+      id: `m-ai-branch-${stamp}`,
+      sender: 'ai',
+      text: `If ${name} says "${node.ifTheySay}", here is your follow-up:`,
+      suggestions: [
+        {
+          id: `s-branch-${stamp}`,
+          category: node.intent || 'Follow-up',
+          replyText: node.suggestedReply,
+          toneVariant: `Prepared for: ${node.ifTheySay}`,
+        },
+      ],
+      timestamp: 'Just now',
+    };
+    update([...current, aiMsg]);
+    setBranchingReply(null);
+    setTimeout(() => scrollViewRef.current?.scrollToOffset({ offset: 0, animated: true }), 250);
+  }, []);
+
+  // The list is inverted (newest at offset 0) so it always opens at the latest messages
+  const items = useMemo(() => buildItems(messages).reverse(), [messages]);
 
   const handleSwap = useCallback((ids: string[]) => {
     onSwapSides(ids).catch((err) =>
@@ -646,24 +703,17 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
         style={styles.chatScroll}
         contentContainerStyle={styles.chatContent}
         keyboardShouldPersistTaps="handled"
+        inverted
         initialNumToRender={10}
         maxToRenderPerBatch={6}
         windowSize={9}
-        onContentSizeChange={() => {
-          if (!isInitialScrollDone.current) {
-            scrollViewRef.current?.scrollToEnd({ animated: false });
-          }
-        }}
-        ListHeaderComponent={
+        // Inverted: the footer renders at the visual top, the header at the visual bottom
+        ListFooterComponent={
           <View style={styles.dateStampContainer}>
             {hasMoreMessages && onLoadEarlier ? (
               <TouchableOpacity
                 style={[styles.dateStampBadge, { marginBottom: 8 }]}
-                onPress={() => {
-                  // Older messages are prepended: stop the auto-snap to bottom while they load
-                  isInitialScrollDone.current = true;
-                  onLoadEarlier();
-                }}
+                onPress={onLoadEarlier}
                 activeOpacity={0.7}
               >
                 <Text style={styles.dateStampText}>Load earlier messages</Text>
@@ -676,7 +726,7 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
             </View>
           </View>
         }
-        ListFooterComponent={
+        ListHeaderComponent={
           isAiThinking ? (
             <Animated.View style={thinkingPulseStyle}>
               <View style={[styles.messageRow, styles.rowAi]}>
@@ -696,6 +746,23 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
           ) : null
         }
       />
+
+      {/* FREE PLAN USAGE */}
+      {freeRepliesLeft !== null && onOpenPaywall ? (
+        <TouchableOpacity
+          style={[styles.usageStrip, freeRepliesLeft <= 3 && styles.usageStripWarn]}
+          onPress={() => onOpenPaywall(freeRepliesLeft <= 0 ? 'messages' : 'upsell')}
+          activeOpacity={0.85}
+        >
+          <Feather name="zap" size={12} color={freeRepliesLeft <= 3 ? Palette.rose600 : Palette.zinc600} />
+          <Text style={[styles.usageStripText, freeRepliesLeft <= 3 && styles.usageStripTextWarn]}>
+            {freeRepliesLeft <= 0
+              ? 'Free replies used up'
+              : `${freeRepliesLeft} free ${freeRepliesLeft === 1 ? 'reply' : 'replies'} left`}
+          </Text>
+          <Text style={styles.usageStripLink}>{freeRepliesLeft <= 0 ? 'Unlock unlimited' : 'See plans'}</Text>
+        </TouchableOpacity>
+      ) : null}
 
       {/* 3. GENRE / VIBE SELECTOR STRIP (Switch vibe anytime) */}
       <View style={styles.genreStripContainer}>
@@ -786,7 +853,7 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
           onSubmitEditing={handleSendMessage}
           returnKeyType="send"
           onFocus={() => {
-            setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+            setTimeout(() => scrollViewRef.current?.scrollToOffset({ offset: 0, animated: true }), 100);
           }}
         />
 
@@ -962,7 +1029,31 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
                   </View>
                   <Text style={styles.scenarioIfText}>If {activeProfile.name} says: {node.ifTheySay}</Text>
                   <View style={styles.scenarioThenBox}>
-                    <Text style={styles.scenarioThenLabel}>Follow-up Move:</Text>
+                    <View style={styles.scenarioThenHeader}>
+                      <Text style={styles.scenarioThenLabel}>Follow-up Move:</Text>
+                      <View style={styles.cardActionsRow}>
+                        <TouchableOpacity
+                          style={styles.iconCircle}
+                          onPress={() => handleCopyBranch(node)}
+                          activeOpacity={0.75}
+                          accessibilityLabel="Copy follow-up"
+                        >
+                          <Feather
+                            name={copiedId === node.id ? 'check' : 'copy'}
+                            size={12}
+                            color={copiedId === node.id ? Palette.emerald600 : Palette.zinc600}
+                          />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.iconCircle}
+                          onPress={() => handleAddBranchToChat(node)}
+                          activeOpacity={0.75}
+                          accessibilityLabel="Add follow-up to chat"
+                        >
+                          <Feather name="plus-circle" size={12} color={Palette.indigo600} />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
                     <Text style={styles.scenarioThenText}>{node.suggestedReply}</Text>
                   </View>
                 </View>
@@ -1065,8 +1156,9 @@ const styles = StyleSheet.create({
   },
   chatContent: {
     paddingHorizontal: 12,
-    paddingTop: 12,
-    paddingBottom: 24,
+    // Inverted list: "top" padding is at the visual bottom
+    paddingTop: 24,
+    paddingBottom: 12,
   },
   dateStampContainer: {
     alignItems: 'center',
@@ -1423,6 +1515,34 @@ const styles = StyleSheet.create({
   },
 
   /* GENRE STRIP */
+  usageStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginHorizontal: 12,
+    marginTop: 8,
+    paddingHorizontal: 12,
+    height: 34,
+    borderRadius: 999,
+    backgroundColor: Palette.zinc100,
+  },
+  usageStripWarn: {
+    backgroundColor: Palette.rose50,
+  },
+  usageStripText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    color: Palette.zinc700,
+  },
+  usageStripTextWarn: {
+    color: Palette.rose600,
+  },
+  usageStripLink: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: Palette.indigo600,
+  },
   genreStripContainer: {
     backgroundColor: '#ffffff',
     borderTopWidth: 1,
@@ -1685,6 +1805,12 @@ const styles = StyleSheet.create({
     backgroundColor: Palette.indigo50,
     padding: 8,
     borderRadius: 6,
+  },
+  scenarioThenHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
   },
   scenarioThenLabel: {
     fontSize: 10,

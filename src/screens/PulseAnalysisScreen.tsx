@@ -13,12 +13,16 @@ import { Feather } from '@expo/vector-icons';
 import { Palette } from '../theme/colors';
 import { ThemeShadows } from '../theme/shadows';
 import { ConversationModel, TargetProfileModel } from '../domain/index';
+import { PaywallError } from '../context/AppContext';
+import { usePullRefresh } from '../lib/usePullRefresh';
 
 interface PulseAnalysisScreenProps {
   activeProfile?: TargetProfileModel;
   hasProfiles: boolean;
   conversation?: ConversationModel;
   onAnalyze: () => Promise<void>;
+  // Where the empty state sends the user: add a person, or share a chat
+  onGetStarted?: () => void;
 }
 
 const effortLabel = (youPct: number) =>
@@ -29,9 +33,11 @@ export const PulseAnalysisScreen: React.FC<PulseAnalysisScreenProps> = ({
   hasProfiles,
   conversation,
   onAnalyze,
+  onGetStarted,
 }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const idleRefresh = usePullRefresh();
   const autoRan = useRef<string | null>(null);
   const scoreAnim = useSharedValue(0);
 
@@ -59,7 +65,7 @@ export const PulseAnalysisScreen: React.FC<PulseAnalysisScreenProps> = ({
     try {
       await onAnalyze();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Analysis failed. Please try again.');
+      setError(err instanceof PaywallError ? null : err instanceof Error ? err.message : 'Analysis failed. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -74,18 +80,53 @@ export const PulseAnalysisScreen: React.FC<PulseAnalysisScreenProps> = ({
   }, [canAnalyze, analysis, conversation?.id]);
 
   if (!hasProfiles || !conversation?.id || !hasChat) {
+    const previews = [
+      { label: 'Interest', value: 72, color: Palette.indigo600 },
+      { label: 'Playfulness', value: 58, color: Palette.emerald600 },
+      { label: 'Romance', value: 41, color: '#db2777' },
+    ];
     return (
-      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={idleRefresh.refreshing} onRefresh={idleRefresh.onRefresh} tintColor={Palette.zinc900} />}
+      >
+        <Text style={styles.pageTitle}>Pulse</Text>
+        <Text style={styles.pageSub}>How the conversation is really going, read from their actual messages.</Text>
+
+        <View style={styles.previewCard}>
+          <View style={styles.previewBadge}>
+            <Feather name="activity" size={11} color={Palette.zinc500} />
+            <Text style={styles.previewBadgeText}>PREVIEW</Text>
+          </View>
+          {previews.map((g) => (
+            <View key={g.label} style={styles.previewRow}>
+              <Text style={styles.previewLabel}>{g.label}</Text>
+              <View style={styles.previewTrack}>
+                <View style={[styles.previewFill, { width: `${g.value}%`, backgroundColor: g.color }]} />
+              </View>
+              <Text style={styles.previewValue}>{g.value}</Text>
+            </View>
+          ))}
+          <View style={styles.previewIntent}>
+            <Text style={styles.previewIntentLabel}>DETECTED INTENT</Text>
+            <Text style={styles.previewIntentText}>Testing your interest</Text>
+          </View>
+        </View>
+
         <View style={styles.stateBox}>
-          <Feather name="activity" size={28} color={Palette.indigo600} />
-          <Text style={styles.stateTitle}>
-            {!hasProfiles ? 'Add someone to analyze' : 'Nothing to analyze yet'}
-          </Text>
+          <Text style={styles.stateTitle}>{!hasProfiles ? 'Add someone first' : `Share a chat with ${targetName || 'them'}`}</Text>
           <Text style={styles.stateSub}>
             {!hasProfiles
-              ? 'Create a profile on the People tab, then share a conversation to see the chemistry pulse.'
-              : `Share what ${targetName || 'they'} said in a chat and the pulse will decode interest, intent and effort.`}
+              ? 'Tell the wingman who you’re texting, then share a chat to see their interest, effort and intent.'
+              : 'Upload a screenshot or paste their messages and the pulse reads interest, effort and what they want.'}
           </Text>
+          {onGetStarted ? (
+            <TouchableOpacity style={styles.retryBtn} onPress={onGetStarted} activeOpacity={0.88}>
+              <Text style={styles.retryText}>{!hasProfiles ? 'Add a person' : 'Share a chat'}</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       </ScrollView>
     );
@@ -760,6 +801,27 @@ const styles = StyleSheet.create({
     backgroundColor: '#f1f5f9',
     marginVertical: 10,
   },
+  pageTitle: { fontSize: 26, fontWeight: '800', color: Palette.zinc900, letterSpacing: -0.6 },
+  pageSub: { fontSize: 13, color: Palette.zinc500, marginTop: 3, lineHeight: 18, marginBottom: 18 },
+  previewCard: {
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: Palette.zinc200,
+    padding: 18,
+    gap: 12,
+    marginBottom: 14,
+    backgroundColor: '#ffffff',
+  },
+  previewBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', backgroundColor: Palette.zinc100, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999 },
+  previewBadgeText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.8, color: Palette.zinc500 },
+  previewRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  previewLabel: { width: 84, fontSize: 12, fontWeight: '700', color: Palette.zinc700 },
+  previewTrack: { flex: 1, height: 8, borderRadius: 4, backgroundColor: Palette.zinc100, overflow: 'hidden' },
+  previewFill: { height: '100%', borderRadius: 4, opacity: 0.35 },
+  previewValue: { width: 26, textAlign: 'right', fontSize: 12, fontWeight: '800', color: Palette.zinc400 },
+  previewIntent: { marginTop: 4, padding: 12, borderRadius: 14, backgroundColor: Palette.zinc50 },
+  previewIntentLabel: { fontSize: 9, fontWeight: '800', letterSpacing: 0.8, color: Palette.zinc400 },
+  previewIntentText: { fontSize: 14, fontWeight: '700', color: Palette.zinc400, marginTop: 2 },
   stateBox: {
     alignItems: 'center',
     backgroundColor: '#fafafa',
