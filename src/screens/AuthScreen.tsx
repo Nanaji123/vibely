@@ -7,11 +7,26 @@ import { authClient } from '../lib/authClient';
 
 export const AuthScreen: React.FC = () => {
   const [signingIn, setSigningIn] = useState(false);
+  const [hint, setHint] = useState<string | null>(null);
 
   const handleGoogleSignIn = async () => {
     setSigningIn(true);
+    setHint(null);
     try {
-      await authClient.signIn.social({ provider: 'google', callbackURL: 'vibely://' });
+      // The client resolves with { data, error } rather than throwing on server/network errors
+      const result = await authClient.signIn.social({ provider: 'google', callbackURL: 'vibely://' });
+      if (result?.error) {
+        Alert.alert(
+          'Sign-in failed',
+          result.error.message || 'Could not start Google sign-in. Check your connection and try again.'
+        );
+      } else {
+        // The browser closes when it finishes, cancelled or not; confirm a session actually exists
+        const session = await authClient.getSession();
+        if (!session.data) {
+          setHint("Sign-in didn't finish. Tap Continue with Google to try again.");
+        }
+      }
     } catch (err) {
       Alert.alert('Sign-in failed', err instanceof Error ? err.message : 'Please try again.');
     } finally {
@@ -51,6 +66,7 @@ export const AuthScreen: React.FC = () => {
             </>
           )}
         </TouchableOpacity>
+        {hint ? <Text style={styles.hint}>{hint}</Text> : null}
       </View>
     </View>
   );
@@ -118,6 +134,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '900',
     color: '#ffffff',
+  },
+  hint: {
+    fontSize: 13,
+    color: Palette.zinc500,
+    textAlign: 'center',
+    lineHeight: 18,
   },
   googleBtnText: {
     fontSize: 15,

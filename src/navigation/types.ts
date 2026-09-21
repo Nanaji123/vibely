@@ -10,6 +10,7 @@ export type MainTabParamList = {
 export type RootStackParamList = {
   Splash: undefined;
   Auth: undefined;
+  Onboarding: undefined;
   Main: NavigatorScreenParams<MainTabParamList> | undefined;
   Studio: { conversationId?: string } | undefined;
   NewSessionFlow: undefined;

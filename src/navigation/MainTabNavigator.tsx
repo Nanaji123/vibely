@@ -22,29 +22,39 @@ type TabNav = CompositeNavigationProp<
 
 const HomeTabScreen: React.FC = () => {
   const navigation = useNavigation<TabNav>();
-  const { activeProfile, conversations, createCustomSession, loadConversation } = useApp();
+  const { activeProfile, hasProfiles, conversations, startNewSession, loadConversation } = useApp();
+  const root = () => navigation.getParent<NativeStackNavigationProp<RootStackParamList>>();
 
   return (
     <HomeScreen
       activeProfile={activeProfile}
+      hasProfiles={hasProfiles}
       recentConversations={conversations}
-      onStartNewSession={() => navigation.getParent<NativeStackNavigationProp<RootStackParamList>>()?.navigate('NewSessionFlow')}
-      onCreateCustomSession={async (rawText, mode) => {
-        await createCustomSession(rawText, mode, activeProfile);
-        navigation.getParent<NativeStackNavigationProp<RootStackParamList>>()?.navigate('Studio');
-      }}
+      onStartNewSession={() => root()?.navigate('NewSessionFlow')}
       onOpenConversation={(conv) => {
         loadConversation(conv);
-        navigation.getParent<NativeStackNavigationProp<RootStackParamList>>()?.navigate('Studio');
+        root()?.navigate('Studio');
+      }}
+      onStartChat={async () => {
+        await startNewSession();
+        root()?.navigate('Studio');
       }}
       onSwitchProfile={() => navigation.navigate('Profiles')}
+      onCreateProfile={() => navigation.navigate('Profiles')}
     />
   );
 };
 
 const PulseTabScreen: React.FC = () => {
-  const { activeProfile, currentConversation } = useApp();
-  return <PulseAnalysisScreen activeProfile={activeProfile} conversation={currentConversation} />;
+  const { activeProfile, currentConversation, hasProfiles, analyzeCurrentConversation } = useApp();
+  return (
+    <PulseAnalysisScreen
+      activeProfile={activeProfile}
+      hasProfiles={hasProfiles}
+      conversation={currentConversation}
+      onAnalyze={analyzeCurrentConversation}
+    />
+  );
 };
 
 const ProfilesTabScreen: React.FC = () => {

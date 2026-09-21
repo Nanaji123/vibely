@@ -10,6 +10,7 @@ import {
   Platform,
   BackHandler,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
@@ -19,15 +20,18 @@ import { Palette } from '../theme/colors';
 import { ThemeShadows } from '../theme/shadows';
 import { TargetProfileModel } from '../domain/index';
 
+const MAX_SCREENSHOTS = 4;
+
 interface NewSessionFlowScreenProps {
   activeProfile: TargetProfileModel;
   onBack: () => void;
   onStartNewSession: () => Promise<void>;
   onCreateCustomSession: (
     rawText: string,
-    mode: 'screenshot' | 'paste' | 'type',
+    mode: 'paste' | 'type',
     profile: TargetProfileModel
   ) => Promise<void>;
+  onCreateScreenshotSession: (images: string[], profile: TargetProfileModel) => Promise<void>;
   onOpenStudio: () => void;
 }
 
@@ -36,12 +40,14 @@ export const NewSessionFlowScreen: React.FC<NewSessionFlowScreenProps> = ({
   onBack,
   onStartNewSession,
   onCreateCustomSession,
+  onCreateScreenshotSession,
   onOpenStudio,
 }) => {
   const [step, setStep] = useState<1 | 2>(1);
   const [method, setMethod] = useState<'screenshot' | 'paste' | 'type'>('screenshot');
   const [pasteText, setPasteText] = useState('');
   const [imageUris, setImageUris] = useState<string[]>([]);
+  const [imageData, setImageData] = useState<string[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // Entrance animation for steps
@@ -82,12 +88,16 @@ export const NewSessionFlowScreen: React.FC<NewSessionFlowScreenProps> = ({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsMultipleSelection: true,
         allowsEditing: false, // Disabled crop window as requested!
-        quality: 0.9,
+        quality: 0.5,
+        base64: true,
+        selectionLimit: MAX_SCREENSHOTS,
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        const newUris = result.assets.map(a => a.uri);
-        setImageUris(prev => [...prev, ...newUris]);
+        const room = MAX_SCREENSHOTS - imageUris.length;
+        const picked = result.assets.filter(a => a.base64).slice(0, Math.max(room, 0));
+        setImageUris(prev => [...prev, ...picked.map(a => a.uri)]);
+        setImageData(prev => [...prev, ...picked.map(a => `data:image/jpeg;base64,${a.base64}`)]);
         setMethod('screenshot');
         setStep(2);
       }
@@ -96,6 +106,7 @@ export const NewSessionFlowScreen: React.FC<NewSessionFlowScreenProps> = ({
 
   const handleRemoveImage = (indexToRemove: number) => {
     setImageUris(prev => prev.filter((_, idx) => idx !== indexToRemove));
+    setImageData(prev => prev.filter((_, idx) => idx !== indexToRemove));
   };
 
   // Clipboard Paste Handler
@@ -113,21 +124,19 @@ export const NewSessionFlowScreen: React.FC<NewSessionFlowScreenProps> = ({
     setIsAnalyzing(true);
     try {
       if (method === 'screenshot') {
-        await onCreateCustomSession(
-          `Uploaded ${imageUris.length} screenshot${imageUris.length > 1 ? 's' : ''} of conversation`,
-          'screenshot',
-          activeProfile
-        );
+        await onCreateScreenshotSession(imageData, activeProfile);
       } else {
         await onCreateCustomSession(pasteText, 'paste', activeProfile);
       }
       onOpenStudio();
+    } catch (err) {
+      Alert.alert('Could not analyze', err instanceof Error ? err.message : 'Please try again.');
     } finally {
       setIsAnalyzing(false);
     }
   };
 
-  const targetName = activeProfile?.name || 'Sarah';
+  const targetName = activeProfile.name;
   const genderLabel =
     activeProfile?.gender === 'female'
       ? '👩 Her'
@@ -385,7 +394,7 @@ export const NewSessionFlowScreen: React.FC<NewSessionFlowScreenProps> = ({
                       style={styles.textArea}
                       value={pasteText}
                       onChangeText={setPasteText}
-                      placeholder={`e.g. Probably just staying home lol`}
+                      placeholder={`What did ${targetName} text you?`}
                       placeholderTextColor={Palette.zinc400}
                       multiline
                       autoFocus

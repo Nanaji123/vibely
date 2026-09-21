@@ -1,54 +1,131 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  RefreshControl,
+  ActivityIndicator,
+} from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
-import { Palette, ThemeColors } from '../theme/colors';
+import { Palette } from '../theme/colors';
 import { ThemeShadows } from '../theme/shadows';
 import { ConversationModel, TargetProfileModel } from '../domain/index';
 
 interface PulseAnalysisScreenProps {
   activeProfile?: TargetProfileModel;
+  hasProfiles: boolean;
   conversation?: ConversationModel;
+  onAnalyze: () => Promise<void>;
 }
+
+const effortLabel = (youPct: number) =>
+  youPct > 60 ? "You're doing most of the work" : youPct < 40 ? 'They are investing more' : 'Balanced effort';
 
 export const PulseAnalysisScreen: React.FC<PulseAnalysisScreenProps> = ({
   activeProfile,
+  hasProfiles,
   conversation,
+  onAnalyze,
 }) => {
-  const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const autoRan = useRef<string | null>(null);
   const scoreAnim = useSharedValue(0);
 
   useEffect(() => {
     scoreAnim.value = withTiming(1, { duration: 650 });
   }, []);
-
   const scoreAnimStyle = useAnimatedStyle(() => ({
     opacity: scoreAnim.value,
     transform: [{ translateY: (1 - scoreAnim.value) * 16 }],
   }));
 
-  const onRefresh = () => {
-    setRefreshing(true);
-    setTimeout(() => {
-      setRefreshing(false);
-    }, 800);
+  const analysis = conversation?.analysis;
+  const targetName = activeProfile?.name || conversation?.targetName || '';
+  const genderLabel =
+    activeProfile?.gender === 'female' ? '👩 Her' : activeProfile?.gender === 'male' ? '👨 Him' : '🧑 Them';
+
+  // Only real chat content counts (the coach's own messages are not the conversation)
+  const hasChat = !!conversation?.messages?.some((m) => m.sender !== 'ai');
+  const canAnalyze = hasProfiles && !!conversation?.id && hasChat;
+  const isStale = !!analysis && analysis.analyzedMessageCount !== undefined && analysis.analyzedMessageCount !== conversation?.messages.length;
+
+  const run = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await onAnalyze();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Analysis failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const targetName = activeProfile?.name || conversation?.targetName || 'Sarah';
-  const targetGender = activeProfile?.gender || 'female';
-  const genderLabel = targetGender === 'female' ? '👩 Her' : targetGender === 'male' ? '👨 Him' : '🧑 Them';
+  // Analyze automatically the first time a conversation without an analysis is viewed
+  useEffect(() => {
+    if (canAnalyze && !analysis && conversation?.id && autoRan.current !== conversation.id) {
+      autoRan.current = conversation.id;
+      run();
+    }
+  }, [canAnalyze, analysis, conversation?.id]);
 
-  // Sentiment metrics
-  const interestScore = conversation?.pulseScore || 85;
-  const playfulnessScore = 91;
-  const romanceScore = 72;
-  const frameScore = 78;
+  if (!hasProfiles || !conversation?.id || !hasChat) {
+    return (
+      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+        <View style={styles.stateBox}>
+          <Feather name="activity" size={28} color={Palette.indigo600} />
+          <Text style={styles.stateTitle}>
+            {!hasProfiles ? 'Add someone to analyze' : 'Nothing to analyze yet'}
+          </Text>
+          <Text style={styles.stateSub}>
+            {!hasProfiles
+              ? 'Create a profile on the People tab, then share a conversation to see the chemistry pulse.'
+              : `Share what ${targetName || 'they'} said in a chat and the pulse will decode interest, intent and effort.`}
+          </Text>
+        </View>
+      </ScrollView>
+    );
+  }
 
-  // Real or sample chat messages from conversation
-  const lastTargetMsg =
-    conversation?.messages?.find(m => m.sender === 'you' && m.text.includes('said:'))?.text.replace(/^She said:|^He said:/i, '').replace(/["']/g, '').trim() ||
-    conversation?.messages?.[0]?.text.replace(/["']/g, '').trim() ||
-    'Probably just staying home lol';
+  if (!analysis) {
+    return (
+      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+        <View style={styles.stateBox}>
+          {loading ? (
+            <>
+              <ActivityIndicator color={Palette.indigo600} />
+              <Text style={styles.stateTitle}>Reading the conversation…</Text>
+              <Text style={styles.stateSub}>Decoding {targetName}'s interest, intent and effort.</Text>
+            </>
+          ) : (
+            <>
+              <Feather name="alert-circle" size={28} color={Palette.zinc400} />
+              <Text style={styles.stateTitle}>{error ? 'Could not analyze' : 'Ready to analyze'}</Text>
+              {error ? <Text style={styles.stateSub}>{error}</Text> : null}
+              <TouchableOpacity style={styles.retryBtn} onPress={run} activeOpacity={0.85}>
+                <Text style={styles.retryText}>{error ? 'Try again' : 'Analyze conversation'}</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+      </ScrollView>
+    );
+  }
+
+  const youPct = Math.round(analysis.effortRatio);
+  const themPct = 100 - youPct;
+  const gauges = [
+    { label: 'Attraction & Interest', value: analysis.interestScore, color: Palette.indigo600 },
+    { label: 'Banter & Playfulness', value: analysis.playfulnessScore, color: Palette.emerald600 },
+    { label: 'Romantic Chemistry', value: analysis.romanceScore, color: '#db2777' },
+    ...(analysis.frameScore !== undefined
+      ? [{ label: 'Frame & Value Balance', value: analysis.frameScore, color: Palette.zinc900 }]
+      : []),
+  ];
 
   return (
     <ScrollView
@@ -56,293 +133,184 @@ export const PulseAnalysisScreen: React.FC<PulseAnalysisScreenProps> = ({
       contentContainerStyle={styles.content}
       refreshControl={
         <RefreshControl
-          refreshing={refreshing}
-          onRefresh={onRefresh}
+          refreshing={loading}
+          onRefresh={run}
           tintColor={Palette.indigo600}
           colors={[Palette.indigo600, Palette.zinc900]}
         />
       }
     >
       <Animated.View style={scoreAnimStyle}>
-      {/* 1. HERO SENTIMENT PULSE BANNER */}
-      <View style={styles.heroCard}>
-        <View style={styles.heroBadgeRow}>
-          <View style={styles.pulseLiveDot} />
-          <Text style={styles.heroBadgeText}>LIVE SENTIMENT RADAR</Text>
-          <View style={styles.targetBadge}>
-            <Text style={styles.targetBadgeText}>{targetName} ({genderLabel})</Text>
+        {/* HERO */}
+        <View style={styles.heroCard}>
+          <View style={styles.heroBadgeRow}>
+            <View style={styles.pulseLiveDot} />
+            <Text style={styles.heroBadgeText}>AI SENTIMENT ANALYSIS</Text>
+            <View style={styles.targetBadge}>
+              <Text style={styles.targetBadgeText}>{targetName} ({genderLabel})</Text>
+            </View>
           </View>
+
+          <Text style={styles.heroTitle}>Conversation Pulse</Text>
+          <Text style={styles.heroSub}>Based on your actual conversation with {targetName}.</Text>
+
+          <View style={styles.overallScoreBox}>
+            <View style={styles.scoreNumberCol}>
+              <Text style={styles.bigScoreNumber}>{analysis.interestScore}%</Text>
+              <Text style={styles.scoreLabelText}>Overall Chemistry</Text>
+            </View>
+            <View style={styles.scoreDivider} />
+            <View style={styles.scoreStatusCol}>
+              {analysis.currentVibeSummary ? (
+                <View style={styles.statusPill}>
+                  <Feather name="trending-up" size={12} color={Palette.emerald600} />
+                  <Text style={styles.statusPillText}>{analysis.currentVibeSummary}</Text>
+                </View>
+              ) : null}
+              {analysis.observation ? <Text style={styles.statusSub}>{analysis.observation}</Text> : null}
+            </View>
+          </View>
+
+          {isStale ? (
+            <TouchableOpacity style={styles.staleRow} onPress={run} activeOpacity={0.8} disabled={loading}>
+              <Feather name="refresh-cw" size={12} color={Palette.indigo600} />
+              <Text style={styles.staleText}>{loading ? 'Updating…' : 'New messages since this analysis. Tap to update'}</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
 
-        <Text style={styles.heroTitle}>Conversation Pulse</Text>
-        <Text style={styles.heroSub}>
-          Real-time emotional tracking, hidden intent decoding, and social dynamic analysis.
-        </Text>
+        {error ? <Text style={[styles.stateSub, { marginBottom: 12 }]}>{error}</Text> : null}
 
-        {/* Big Overall Metric Banner */}
-        <View style={styles.overallScoreBox}>
-          <View style={styles.scoreNumberCol}>
-            <Text style={styles.bigScoreNumber}>{interestScore}%</Text>
-            <Text style={styles.scoreLabelText}>Overall Chemistry</Text>
+        {/* INTENT & EFFORT */}
+        <View style={styles.sectionContainer}>
+          <View style={styles.sectionHeaderRow}>
+            <Feather name="compass" size={15} color={Palette.indigo600} />
+            <Text style={styles.sectionTitle}>Intent & Effort Dynamics</Text>
           </View>
 
-          <View style={styles.scoreDivider} />
-
-          <View style={styles.scoreStatusCol}>
-            <View style={styles.statusPill}>
-              <Feather name="trending-up" size={12} color={Palette.emerald600} />
-              <Text style={styles.statusPillText}>High Receptive Interest</Text>
+          {analysis.detectedIntent ? (
+            <View style={styles.intentCard}>
+              <View style={styles.intentHeader}>
+                <View style={styles.intentTagBox}>
+                  <Feather name="zap" size={11} color={Palette.indigo600} />
+                  <Text style={styles.intentTagText}>DETECTED INTENT</Text>
+                </View>
+              </View>
+              <Text style={styles.intentMainStatement}>{analysis.detectedIntent}</Text>
+              {analysis.intentExplanation ? (
+                <Text style={styles.intentExplanation}>{analysis.intentExplanation}</Text>
+              ) : null}
             </View>
-            <Text style={styles.statusSub}>
-              {targetName} is invested in the banter and receptive to bold escalation.
-            </Text>
-          </View>
-        </View>
-      </View>
+          ) : null}
 
-      {/* 2. INTENT & EFFORT DYNAMICS (User explicitly requested intent & effort) */}
-      <View style={styles.sectionContainer}>
-        <View style={styles.sectionHeaderRow}>
-          <Feather name="compass" size={15} color={Palette.indigo600} />
-          <Text style={styles.sectionTitle}>Intent & Effort Dynamics</Text>
-        </View>
-
-        {/* A. Detected Hidden Intent */}
-        <View style={styles.intentCard}>
-          <View style={styles.intentHeader}>
-            <View style={styles.intentTagBox}>
-              <Feather name="zap" size={11} color={Palette.indigo600} />
-              <Text style={styles.intentTagText}>DETECTED INTENT</Text>
+          <View style={styles.effortCard}>
+            <View style={styles.effortHeader}>
+              <Text style={styles.effortTitle}>Conversation Effort Ratio</Text>
+              <View style={styles.effortStatusPill}>
+                <Text style={styles.effortStatusText}>{effortLabel(youPct)}</Text>
+              </View>
             </View>
-            <Text style={styles.confidenceTag}>92% Confidence</Text>
-          </View>
-
-          <Text style={styles.intentMainStatement}>
-            Playful Reluctance & Invitation to Take Lead
-          </Text>
-          <Text style={styles.intentExplanation}>
-            {targetName} is playing low-effort to avoid appearing desperate, while leaving her schedule open. She is testing whether you will take decisive initiative or ask generic questions.
-          </Text>
-        </View>
-
-        {/* B. Effort Balance Ratio (You vs Them) */}
-        <View style={styles.effortCard}>
-          <View style={styles.effortHeader}>
-            <Text style={styles.effortTitle}>Conversation Effort Ratio</Text>
-            <View style={styles.effortStatusPill}>
-              <Text style={styles.effortStatusText}>Ideal Frame Balance</Text>
-            </View>
-          </View>
-
-          {/* Effort Bar Comparison */}
-          <View style={styles.effortBarTrack}>
-            <View style={[styles.effortBarYou, { width: '48%' }]}>
-              <Text style={styles.effortBarText}>You: 48%</Text>
-            </View>
-            <View style={[styles.effortBarThem, { width: '52%' }]}>
-              <Text style={styles.effortBarText}>Them: 52%</Text>
-            </View>
-          </View>
-
-          {/* Effort Micro Metrics */}
-          <View style={styles.microMetricsRow}>
-            <View style={styles.microMetricItem}>
-              <Text style={styles.microMetricVal}>1.1 : 1</Text>
-              <Text style={styles.microMetricLabel}>Message Length</Text>
-            </View>
-            <View style={styles.microMetricItem}>
-              <Text style={styles.microMetricVal}>&lt; 3 mins</Text>
-              <Text style={styles.microMetricLabel}>Response Speed</Text>
-            </View>
-            <View style={styles.microMetricItem}>
-              <Text style={styles.microMetricVal}>1 : 2</Text>
-              <Text style={styles.microMetricLabel}>Question Ratio</Text>
-            </View>
-          </View>
-        </View>
-      </View>
-
-      {/* 3. CHAT CONTEXT & SUBTEXT DECODER (User explicitly requested chat contexts) */}
-      <View style={styles.sectionContainer}>
-        <View style={styles.sectionHeaderRow}>
-          <Feather name="message-square" size={15} color={Palette.indigo600} />
-          <Text style={styles.sectionTitle}>Chat Context & Subtext Breakdown</Text>
-        </View>
-
-        {/* Chat Excerpt Breakdown 1 */}
-        <View style={styles.chatContextCard}>
-          <View style={styles.contextCardHeader}>
-            <View style={styles.speakerPillThem}>
-              <Text style={styles.speakerPillText}>{targetName} Sent</Text>
-            </View>
-            <View style={styles.contextIntentBadge}>
-              <Text style={styles.contextIntentText}>Passive Hook</Text>
-            </View>
-          </View>
-
-          <Text style={styles.contextQuoteText}>
-            "{lastTargetMsg}"
-          </Text>
-
-          {/* Subtext Decoder Box */}
-          <View style={styles.subtextBox}>
-            <View style={styles.subtextBadgeRow}>
-              <Feather name="eye" size={11} color={Palette.indigo600} />
-              <Text style={styles.subtextBadgeTitle}>SUBTEXT DECODED</Text>
-            </View>
-            <Text style={styles.subtextBody}>
-              "I have no actual plans tonight, but I'm not going to ask you out first. If you invite me somewhere fun and confident, I'm down."
-            </Text>
-          </View>
-
-          {/* Recommended Counter Move */}
-          <View style={styles.counterMoveBox}>
-            <Text style={styles.counterMoveLabel}>RECOMMENDED RESPONSE:</Text>
-            <Text style={styles.counterMoveText}>
-              "Staying home? Sounds like you need better plans 😏 I know a great spot."
-            </Text>
-            <View style={styles.counterEffectRow}>
-              <Feather name="arrow-up-right" size={12} color={Palette.emerald600} />
-              <Text style={styles.counterEffectText}>+18% Interest Escalation</Text>
+            <View style={styles.effortBarTrack}>
+              <View style={[styles.effortBarYou, { width: `${Math.max(youPct, 8)}%` }]}>
+                <Text style={styles.effortBarText}>You: {youPct}%</Text>
+              </View>
+              <View style={[styles.effortBarThem, { width: `${Math.max(themPct, 8)}%` }]}>
+                <Text style={styles.effortBarText}>Them: {themPct}%</Text>
+              </View>
             </View>
           </View>
         </View>
 
-        {/* Chat Excerpt Breakdown 2 */}
-        <View style={styles.chatContextCard}>
-          <View style={styles.contextCardHeader}>
-            <View style={styles.speakerPillThem}>
-              <Text style={styles.speakerPillText}>{targetName} Sent</Text>
+        {/* MOMENTS */}
+        {analysis.moments && analysis.moments.length > 0 ? (
+          <View style={styles.sectionContainer}>
+            <View style={styles.sectionHeaderRow}>
+              <Feather name="message-square" size={15} color={Palette.indigo600} />
+              <Text style={styles.sectionTitle}>Chat Context & Subtext Breakdown</Text>
             </View>
-            <View style={styles.contextIntentBadge}>
-              <Text style={styles.contextIntentText}>Banter Test</Text>
-            </View>
+            {analysis.moments.map((m, i) => (
+              <View key={i} style={styles.chatContextCard}>
+                <View style={styles.contextCardHeader}>
+                  <View style={styles.speakerPillThem}>
+                    <Text style={styles.speakerPillText}>{targetName} Sent</Text>
+                  </View>
+                </View>
+                <Text style={styles.contextQuoteText}>"{m.theirMessage}"</Text>
+                {m.subtext ? (
+                  <View style={styles.subtextBox}>
+                    <View style={styles.subtextBadgeRow}>
+                      <Feather name="eye" size={11} color={Palette.indigo600} />
+                      <Text style={styles.subtextBadgeTitle}>SUBTEXT DECODED</Text>
+                    </View>
+                    <Text style={styles.subtextBody}>{m.subtext}</Text>
+                  </View>
+                ) : null}
+                {m.recommendedReply ? (
+                  <View style={styles.counterMoveBox}>
+                    <Text style={styles.counterMoveLabel}>RECOMMENDED RESPONSE:</Text>
+                    <Text style={styles.counterMoveText}>"{m.recommendedReply}"</Text>
+                  </View>
+                ) : null}
+              </View>
+            ))}
           </View>
+        ) : null}
 
-          <Text style={styles.contextQuoteText}>
-            "haha maybe 😂"
-          </Text>
-
-          {/* Subtext Decoder Box */}
-          <View style={styles.subtextBox}>
-            <View style={styles.subtextBadgeRow}>
-              <Feather name="eye" size={11} color={Palette.indigo600} />
-              <Text style={styles.subtextBadgeTitle}>SUBTEXT DECODED</Text>
-            </View>
-            <Text style={styles.subtextBody}>
-              "I like your energy and confidence, but I want to tease you and see if you get flustered."
-            </Text>
+        {/* METRICS */}
+        <View style={styles.sectionContainer}>
+          <View style={styles.sectionHeaderRow}>
+            <Feather name="bar-chart-2" size={15} color={Palette.indigo600} />
+            <Text style={styles.sectionTitle}>Psychological Metrics</Text>
           </View>
-
-          {/* Recommended Counter Move */}
-          <View style={styles.counterMoveBox}>
-            <Text style={styles.counterMoveLabel}>RECOMMENDED RESPONSE:</Text>
-            <Text style={styles.counterMoveText}>
-              "That 'maybe' sounds like a solid yes disguised as plausible deniability 😏"
-            </Text>
-            <View style={styles.counterEffectRow}>
-              <Feather name="arrow-up-right" size={12} color={Palette.emerald600} />
-              <Text style={styles.counterEffectText}>+22% Attraction Spike</Text>
-            </View>
-          </View>
-        </View>
-      </View>
-
-      {/* 4. 4-METRIC RADAR GAUGES */}
-      <View style={styles.sectionContainer}>
-        <View style={styles.sectionHeaderRow}>
-          <Feather name="bar-chart-2" size={15} color={Palette.indigo600} />
-          <Text style={styles.sectionTitle}>Psychological Metrics</Text>
-        </View>
-
-        <View style={styles.metricsGrid}>
-          {/* Metric 1 */}
-          <View style={styles.gaugeCard}>
-            <View style={styles.gaugeHeader}>
-              <Text style={styles.gaugeLabel}>Attraction & Interest</Text>
-              <Text style={styles.gaugeVal}>{interestScore}%</Text>
-            </View>
-            <View style={styles.gaugeTrack}>
-              <View style={[styles.gaugeFill, { width: `${interestScore}%`, backgroundColor: Palette.indigo600 }]} />
-            </View>
-            <Text style={styles.gaugeCaption}>High engagement & fast replies</Text>
-          </View>
-
-          {/* Metric 2 */}
-          <View style={styles.gaugeCard}>
-            <View style={styles.gaugeHeader}>
-              <Text style={styles.gaugeLabel}>Banter & Playfulness</Text>
-              <Text style={styles.gaugeVal}>{playfulnessScore}%</Text>
-            </View>
-            <View style={styles.gaugeTrack}>
-              <View style={[styles.gaugeFill, { width: `${playfulnessScore}%`, backgroundColor: Palette.emerald600 }]} />
-            </View>
-            <Text style={styles.gaugeCaption}>Frequent humor and teasing</Text>
-          </View>
-
-          {/* Metric 3 */}
-          <View style={styles.gaugeCard}>
-            <View style={styles.gaugeHeader}>
-              <Text style={styles.gaugeLabel}>Romantic Chemistry</Text>
-              <Text style={styles.gaugeVal}>{romanceScore}%</Text>
-            </View>
-            <View style={styles.gaugeTrack}>
-              <View style={[styles.gaugeFill, { width: `${romanceScore}%`, backgroundColor: '#db2777' }]} />
-            </View>
-            <Text style={styles.gaugeCaption}>Ready for date escalation</Text>
-          </View>
-
-          {/* Metric 4 */}
-          <View style={styles.gaugeCard}>
-            <View style={styles.gaugeHeader}>
-              <Text style={styles.gaugeLabel}>Frame & Value Balance</Text>
-              <Text style={styles.gaugeVal}>{frameScore}%</Text>
-            </View>
-            <View style={styles.gaugeTrack}>
-              <View style={[styles.gaugeFill, { width: `${frameScore}%`, backgroundColor: Palette.zinc900 }]} />
-            </View>
-            <Text style={styles.gaugeCaption}>You are maintaining high status</Text>
+          <View style={styles.metricsGrid}>
+            {gauges.map((g) => (
+              <View key={g.label} style={styles.gaugeCard}>
+                <View style={styles.gaugeHeader}>
+                  <Text style={styles.gaugeLabel}>{g.label}</Text>
+                  <Text style={styles.gaugeVal}>{g.value}%</Text>
+                </View>
+                <View style={styles.gaugeTrack}>
+                  <View style={[styles.gaugeFill, { width: `${g.value}%`, backgroundColor: g.color }]} />
+                </View>
+              </View>
+            ))}
           </View>
         </View>
-      </View>
 
-      {/* 5. TACTICAL PLAYBOOK (NEXT MOVE DIRECTIVE) */}
-      <View style={styles.sectionContainer}>
-        <View style={styles.sectionHeaderRow}>
-          <Feather name="shield" size={15} color={Palette.indigo600} />
-          <Text style={styles.sectionTitle}>Wingman Tactical Playbook</Text>
-        </View>
-
-        <View style={styles.playbookCard}>
-          {/* Tactical Do */}
-          <View style={styles.playbookRow}>
-            <View style={[styles.playbookIconCircle, { backgroundColor: '#ecfdf5' }]}>
-              <Feather name="check" size={14} color={Palette.emerald600} />
+        {/* PLAYBOOK */}
+        {analysis.doNext || analysis.suggestion || analysis.avoid ? (
+          <View style={styles.sectionContainer}>
+            <View style={styles.sectionHeaderRow}>
+              <Feather name="shield" size={15} color={Palette.indigo600} />
+              <Text style={styles.sectionTitle}>Wingman Tactical Playbook</Text>
             </View>
-            <View style={styles.playbookTextBox}>
-              <Text style={styles.playbookTitleGreen}>Next Move Directive</Text>
-              <Text style={styles.playbookBody}>
-                Transition from banter to a low-pressure in-person invite (e.g. coffee or dessert this weekend). Momentum is peaked right now.
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.playbookDivider} />
-
-          {/* Tactical Avoid */}
-          <View style={styles.playbookRow}>
-            <View style={[styles.playbookIconCircle, { backgroundColor: '#fef2f2' }]}>
-              <Feather name="alert-triangle" size={14} color="#dc2626" />
-            </View>
-            <View style={styles.playbookTextBox}>
-              <Text style={styles.playbookTitleRed}>Mistake to Avoid</Text>
-              <Text style={styles.playbookBody}>
-                Do not ask "So what do you do for work?" or switch into boring resume questions. Keep the high-energy banter frame.
-              </Text>
+            <View style={styles.playbookCard}>
+              {analysis.doNext || analysis.suggestion ? (
+                <View style={styles.playbookRow}>
+                  <View style={[styles.playbookIconCircle, { backgroundColor: '#ecfdf5' }]}>
+                    <Feather name="check" size={14} color={Palette.emerald600} />
+                  </View>
+                  <View style={styles.playbookTextBox}>
+                    <Text style={styles.playbookTitleGreen}>Next Move Directive</Text>
+                    <Text style={styles.playbookBody}>{analysis.doNext || analysis.suggestion}</Text>
+                  </View>
+                </View>
+              ) : null}
+              {(analysis.doNext || analysis.suggestion) && analysis.avoid ? <View style={styles.playbookDivider} /> : null}
+              {analysis.avoid ? (
+                <View style={styles.playbookRow}>
+                  <View style={[styles.playbookIconCircle, { backgroundColor: '#fef2f2' }]}>
+                    <Feather name="alert-triangle" size={14} color="#dc2626" />
+                  </View>
+                  <View style={styles.playbookTextBox}>
+                    <Text style={styles.playbookTitleRed}>Mistake to Avoid</Text>
+                    <Text style={styles.playbookBody}>{analysis.avoid}</Text>
+                  </View>
+                </View>
+              ) : null}
             </View>
           </View>
-        </View>
-      </View>
+        ) : null}
       </Animated.View>
     </ScrollView>
   );
@@ -791,5 +759,56 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: '#f1f5f9',
     marginVertical: 10,
+  },
+  stateBox: {
+    alignItems: 'center',
+    backgroundColor: '#fafafa',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#e4e4e7',
+    paddingVertical: 40,
+    paddingHorizontal: 24,
+    gap: 10,
+    marginTop: 8,
+  },
+  stateTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: Palette.zinc900,
+    textAlign: 'center',
+  },
+  stateSub: {
+    fontSize: 13,
+    color: Palette.zinc500,
+    textAlign: 'center',
+    lineHeight: 19,
+  },
+  retryBtn: {
+    marginTop: 6,
+    backgroundColor: Palette.zinc900,
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+    borderRadius: 10,
+  },
+  retryText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  staleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 12,
+    alignSelf: 'flex-start',
+    backgroundColor: Palette.indigo50,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  staleText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: Palette.indigo600,
   },
 });

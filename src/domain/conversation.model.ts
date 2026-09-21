@@ -26,6 +26,13 @@ export interface PulseAnalysisModel {
   observation: string;         // Strategic observation tip
   suggestion: string;          // Actionable coaching next step
   subtext: string;             // Subtext decoder
+  frameScore?: number;
+  detectedIntent?: string;
+  intentExplanation?: string;
+  moments?: { theirMessage: string; subtext: string; recommendedReply: string }[];
+  doNext?: string;
+  avoid?: string;
+  analyzedMessageCount?: number;
 }
 
 export interface ConversationModel {
@@ -38,5 +45,6 @@ export interface ConversationModel {
   messages: ChatMessageModel[];
   currentVibe: string;
   pulseScore?: number;
+  analysis?: PulseAnalysisModel;
   updatedAt: string;
 }

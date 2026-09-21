@@ -1,448 +1,309 @@
-import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  RefreshControl,
-  BackHandler,
-} from 'react-native';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  withRepeat,
-} from 'react-native-reanimated';
+import React from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as ImagePicker from 'expo-image-picker';
-import * as Clipboard from 'expo-clipboard';
-import { Palette, ThemeColors } from '../theme/colors';
+import { Palette } from '../theme/colors';
 import { ThemeShadows } from '../theme/shadows';
 import { ConversationModel, TargetProfileModel } from '../domain/index';
-import { AIService } from '../services/aiService';
 
 interface HomeScreenProps {
   activeProfile?: TargetProfileModel;
+  hasProfiles: boolean;
   recentConversations: ConversationModel[];
   onStartNewSession: () => void;
-  onCreateCustomSession?: (rawText: string, mode: 'screenshot' | 'paste' | 'type') => void;
   onOpenConversation: (conv: ConversationModel) => void;
+  onStartChat: () => void;
   onSwitchProfile: () => void;
+  onCreateProfile: () => void;
 }
+
+const genderLabelOf = (gender?: string) =>
+  gender === 'female' ? '👩 Her' : gender === 'male' ? '👨 Him' : '🧑 Them';
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({
   activeProfile,
+  hasProfiles,
   recentConversations,
   onStartNewSession,
-  onCreateCustomSession,
   onOpenConversation,
+  onStartChat,
   onSwitchProfile,
+  onCreateProfile,
 }) => {
-  const [showNewSessionModal, setShowNewSessionModal] = useState(false);
-  const [modalMode, setModalMode] = useState<'picker' | 'paste'>('picker');
-  const [pasteText, setPasteText] = useState('');
-  const [refreshing, setRefreshing] = useState(false);
-
-  // Skeleton pulse animation
-  const skeletonOpacity = useSharedValue(0.4);
-  useEffect(() => {
-    skeletonOpacity.value = withRepeat(withTiming(0.9, { duration: 700 }), -1, true);
-  }, []);
-  const skeletonAnimStyle = useAnimatedStyle(() => ({ opacity: skeletonOpacity.value }));
-
-  // Handle Android Back Gesture / Button
-  useEffect(() => {
-    const onBackPress = () => {
-      if (showNewSessionModal) {
-        setShowNewSessionModal(false);
-        setModalMode('picker');
-        return true;
-      }
-      return false;
-    };
-
-    const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
-    return () => subscription.remove();
-  }, [showNewSessionModal]);
-
-  const onRefresh = () => {
-    setRefreshing(true);
-    setTimeout(() => {
-      setRefreshing(false);
-    }, 850);
-  };
-
-  // Top/Current active conversation matching activeProfile
-  const activeConvo = recentConversations.find(
-    (c) =>
-      (activeProfile?.id && c.profileId === activeProfile.id) ||
-      (activeProfile?.name && c.targetName.toLowerCase() === activeProfile.name.toLowerCase())
-  );
-
-  const currentConvo: ConversationModel = activeConvo || {
-    id: `conv-${activeProfile?.id || 'default'}`,
-    profileId: activeProfile?.id,
-    title: `Wingman Session with ${activeProfile?.name || 'Target'}`,
-    targetName: activeProfile?.name || 'Target',
-    relationship: activeProfile?.relationship || 'crush',
-    personalityTraits: activeProfile?.personalityTraits || [],
-    messages: [
-      {
-        id: `m-init-${activeProfile?.id || 'default'}`,
-        sender: 'ai',
-        text: `Hey! I'm your wingman for ${activeProfile?.name || 'your target'}. What did ${
-          activeProfile?.gender === 'male' ? 'he' : activeProfile?.gender === 'female' ? 'she' : 'they'
-        } text you? Tell me what ${
-          activeProfile?.gender === 'male' ? 'he' : activeProfile?.gender === 'female' ? 'she' : 'they'
-        } said, or upload a screenshot and I'll break down ${
-          activeProfile?.gender === 'male' ? 'his' : activeProfile?.gender === 'female' ? 'her' : 'their'
-        } signals.`,
-      },
-    ],
-    currentVibe: 'witty',
-    pulseScore: 84,
-    updatedAt: new Date().toISOString(),
-  };
-
-  const targetName = activeProfile?.name || currentConvo.targetName;
-  const targetGender = activeProfile?.gender || 'female';
-  const genderLabel = targetGender === 'female' ? '👩 Her' : targetGender === 'male' ? '👨 Him' : '🧑 Them';
-
-  // 1. Upload Screenshot Handler
-  const handleUploadScreenshot = async () => {
-    try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: true,
-        quality: 0.8,
-      });
-
-      if (!result.canceled && result.assets && result.assets[0]) {
-        const extracted = AIService.extractChatFromImage(result.assets[0].uri);
-        const lastMsg = extracted.messages[extracted.messages.length - 1]?.text || 'Probably just staying home lol';
-        if (onCreateCustomSession) {
-          onCreateCustomSession(lastMsg, 'screenshot');
-        }
-      }
-    } catch (e) {
-      // Ignore user cancellation or access denial
-    }
-    setShowNewSessionModal(false);
-    setModalMode('picker');
-  };
-
-  // 2. Paste Submit Handler
-  const handlePasteSubmit = () => {
-    if (!pasteText.trim()) return;
-    if (onCreateCustomSession) {
-      onCreateCustomSession(pasteText.trim(), 'paste');
-    }
-    setPasteText('');
-    setShowNewSessionModal(false);
-    setModalMode('picker');
-  };
-
-  // 3. Quick Paste from Clipboard
-  const handlePasteFromClipboard = async () => {
-    try {
-      const text = await Clipboard.getStringAsync();
-      if (text) {
-        setPasteText(text);
-      }
-    } catch (e) {}
-  };
-
-  // 4. Type Directly in Chat Handler
-  const handleTypeInChat = () => {
-    setShowNewSessionModal(false);
-    setModalMode('picker');
-    onStartNewSession();
-  };
-
-  // Entrance Animation
   const contentFade = useSharedValue(0);
   const contentSlide = useSharedValue(18);
-
-  useEffect(() => {
+  React.useEffect(() => {
     contentFade.value = withTiming(1, { duration: 350 });
     contentSlide.value = withTiming(0, { duration: 350 });
   }, []);
-
   const contentAnimStyle = useAnimatedStyle(() => ({
     opacity: contentFade.value,
     transform: [{ translateY: contentSlide.value }],
   }));
 
+  // The real conversation for the active profile, if one exists
+  const activeConvo = activeProfile
+    ? recentConversations.find(
+        (c) => c.profileId === activeProfile.id || c.targetName.toLowerCase() === activeProfile.name.toLowerCase()
+      )
+    : undefined;
+  const otherConvos = recentConversations.filter((c) => c.id !== activeConvo?.id).slice(0, 3);
+
+  const targetName = activeProfile?.name ?? '';
+  const genderLabel = genderLabelOf(activeProfile?.gender);
+
+  const previewMsgs = activeConvo?.messages ?? [];
+  const lastThem = [...previewMsgs].reverse().find((m) => m.sender === 'them')?.text;
+  const relayed = previewMsgs
+    .find((m) => m.sender === 'you' && /said:/i.test(m.text))
+    ?.text.replace(/^(she|he|they) said:/i, '')
+    .replace(/["']/g, '')
+    .trim();
+  const theirText = lastThem ?? relayed;
+  const sceneContext = previewMsgs.find((m) => m.sender === 'ai' && m.sceneContext)?.sceneContext;
+  const readySuggestions = [...previewMsgs]
+    .reverse()
+    .find((m) => m.sender === 'ai' && m.suggestions?.length && !m.selectedSuggestionId)?.suggestions?.length;
+
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.scrollContent}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-          tintColor={Palette.indigo600}
-          colors={[Palette.indigo600, Palette.zinc900]}
-        />
-      }
-    >
+    <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
       <Animated.View style={contentAnimStyle}>
-      {/* 1. TOP HEADER & STATUS BAR */}
-      <View style={styles.topStatusHeader}>
-        <View>
-          <Text style={styles.appBrandTitle}>Vibely AI</Text>
-          <Text style={styles.appBrandSub}>AI Conversation Wingman</Text>
+        {/* HEADER */}
+        <View style={styles.topStatusHeader}>
+          <View>
+            <Text style={styles.appBrandTitle}>Vibely AI</Text>
+            <Text style={styles.appBrandSub}>AI Conversation Wingman</Text>
+          </View>
         </View>
 
-        <View style={styles.onlineBadge}>
-          <View style={styles.onlineGreenDot} />
-          <Text style={styles.onlineBadgeText}>AI Engine Active</Text>
-        </View>
-      </View>
-
-      {/* SKELETON LOADER STATE (Rendered when pulling to refresh) */}
-      {refreshing ? (
-        <View style={{ gap: 14, marginBottom: 16 }}>
-          <Animated.View style={[styles.skeletonCard, skeletonAnimStyle]}>
-            <View style={styles.skeletonLineTop} />
-            <View style={styles.skeletonLineMid} />
-            <View style={styles.skeletonLineShort} />
-          </Animated.View>
-          <Animated.View style={[styles.skeletonCardSmall, skeletonAnimStyle]}>
-            <View style={styles.skeletonLineTop} />
-          </Animated.View>
-        </View>
-      ) : (
-        /* 2. CURRENT CONVO CARD ON TOP (The Chat Card on Top!) */
-        currentConvo ? (
-          <View style={styles.topChatCardSection}>
-            <View style={styles.sectionTitleRow}>
-              <View style={styles.sectionBadgeBox}>
-                <Feather name="message-circle" size={12} color={Palette.indigo600} />
-                <Text style={styles.sectionBadgeText}>CURRENT CONVERSATION</Text>
-              </View>
-              <View style={styles.pulsePill}>
-                <Feather name="activity" size={11} color={Palette.emerald600} />
-                <Text style={styles.pulsePillText}>{currentConvo.pulseScore || 84}% Pulse</Text>
-              </View>
+        {!hasProfiles || !activeProfile ? (
+          <View style={styles.emptyCard}>
+            <View style={styles.emptyIconCircle}>
+              <Feather name="user-plus" size={26} color={Palette.indigo600} />
             </View>
-
-          {/* Interactive Chat Card */}
-          <TouchableOpacity
-            style={styles.chatCardOnTop}
-            onPress={() => onOpenConversation(currentConvo)}
-            activeOpacity={0.9}
-          >
-            {/* Target Header Inside Card */}
-            <View style={styles.cardHeaderRow}>
-              <View style={styles.cardAvatar}>
-                <Text style={styles.cardAvatarEmoji}>
-                  {activeProfile?.avatarEmoji || (targetName === 'Sarah' ? '💕' : '❤️')}
-                </Text>
+            <Text style={styles.emptyTitle}>Add the person you're texting</Text>
+            <Text style={styles.emptySub}>
+              Create a profile with their name and personality so Vibely can tailor every reply to them. Then start your first chat.
+            </Text>
+            <TouchableOpacity style={styles.emptyBtn} onPress={onCreateProfile} activeOpacity={0.85}>
+              <Feather name="plus" size={15} color="#ffffff" />
+              <Text style={styles.emptyBtnText}>Create a profile</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <>
+            {/* CURRENT CONVERSATION */}
+            <View style={styles.topChatCardSection}>
+              <View style={styles.sectionTitleRow}>
+                <View style={styles.sectionBadgeBox}>
+                  <Feather name="message-circle" size={12} color={Palette.indigo600} />
+                  <Text style={styles.sectionBadgeText}>CURRENT CONVERSATION</Text>
+                </View>
+                {activeConvo?.pulseScore !== undefined ? (
+                  <View style={styles.pulsePill}>
+                    <Feather name="activity" size={11} color={Palette.emerald600} />
+                    <Text style={styles.pulsePillText}>{activeConvo.pulseScore}% Pulse</Text>
+                  </View>
+                ) : null}
               </View>
 
-              <View style={styles.cardTargetDetails}>
-                <View style={styles.nameRow}>
-                  <Text style={styles.cardTargetName}>{targetName}</Text>
-                  <View style={styles.cardGenderChip}>
-                    <Text style={styles.cardGenderText}>{genderLabel}</Text>
+              <TouchableOpacity
+                style={styles.chatCardOnTop}
+                onPress={() => (activeConvo ? onOpenConversation(activeConvo) : onStartChat())}
+                activeOpacity={0.9}
+              >
+                <View style={styles.cardHeaderRow}>
+                  <View style={styles.cardAvatar}>
+                    <Text style={styles.cardAvatarEmoji}>{activeProfile.avatarEmoji || '❤️'}</Text>
                   </View>
-                  <View style={styles.cardRelChip}>
-                    <Text style={styles.cardRelText}>
-                      {(activeProfile?.relationship || currentConvo.relationship || 'crush').toUpperCase()}
+                  <View style={styles.cardTargetDetails}>
+                    <View style={styles.nameRow}>
+                      <Text style={styles.cardTargetName}>{targetName}</Text>
+                      <View style={styles.cardGenderChip}>
+                        <Text style={styles.cardGenderText}>{genderLabel}</Text>
+                      </View>
+                      <View style={styles.cardRelChip}>
+                        <Text style={styles.cardRelText}>{activeProfile.relationship.toUpperCase()}</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.cardVibeSummary}>{activeProfile.vibeSummary || 'No summary yet'}</Text>
+                  </View>
+                  <View style={styles.openStudioIcon}>
+                    <Feather name="chevron-right" size={20} color={Palette.zinc400} />
+                  </View>
+                </View>
+
+                {activeConvo ? (
+                  <View style={styles.cardPreviewContainer}>
+                    <View style={styles.previewBubbleThem}>
+                      <Text style={styles.previewLabelThem}>{targetName} said:</Text>
+                      <Text style={styles.previewTextThem} numberOfLines={2}>
+                        {theirText ? `"${theirText}"` : `Waiting for ${targetName}'s message...`}
+                      </Text>
+                    </View>
+                    {sceneContext ? (
+                      <View style={styles.previewBubbleAi}>
+                        <View style={styles.aiSnippetRow}>
+                          <Feather name="zap" size={11} color={Palette.indigo600} />
+                          <Text style={styles.aiSnippetLabel}>AI WINGMAN SCENE ADVICE</Text>
+                        </View>
+                        <Text style={styles.aiSnippetText} numberOfLines={2}>{sceneContext}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                ) : (
+                  <View style={styles.cardPreviewContainer}>
+                    <Text style={styles.previewTextThem}>
+                      No conversation with {targetName} yet. Start one to get tailored replies.
                     </Text>
                   </View>
+                )}
+
+                <View style={styles.cardFooter}>
+                  <Text style={styles.cardFooterHint}>
+                    {readySuggestions
+                      ? `${readySuggestions} tailored responses ready`
+                      : activeConvo
+                      ? 'Continue the conversation'
+                      : 'Ready when you are'}
+                  </Text>
+                  <View style={styles.cardCtaBtn}>
+                    <Text style={styles.cardCtaBtnText}>{activeConvo ? 'Open Chat Studio' : 'Start chat'}</Text>
+                    <Feather name="arrow-right" size={12} color="#ffffff" />
+                  </View>
                 </View>
-                <Text style={styles.cardVibeSummary}>
-                  {activeProfile?.vibeSummary || currentConvo.title || `Chat with ${targetName}`}
-                </Text>
-              </View>
-
-              <View style={styles.openStudioIcon}>
-                <Feather name="chevron-right" size={20} color={Palette.zinc400} />
-              </View>
+              </TouchableOpacity>
             </View>
 
-            {/* Chat Preview Bubbles Inside Card */}
-            <View style={styles.cardPreviewContainer}>
-              {/* Target Message Preview */}
-              <View style={styles.previewBubbleThem}>
-                <Text style={styles.previewLabelThem}>
-                  {targetName} said:
-                </Text>
-                <Text style={styles.previewTextThem} numberOfLines={2}>
-                  "{currentConvo.messages?.find(m => m.sender === 'you' && m.text.includes('said:'))?.text.replace(/^She said:|^He said:|^They said:/i, '').replace(/["']/g, '').trim() ||
-                    currentConvo.messages?.[currentConvo.messages.length - 1]?.text ||
-                    `Waiting for ${targetName}'s message...`}"
-                </Text>
-              </View>
-
-              {/* AI Coaching Snippet */}
-              <View style={styles.previewBubbleAi}>
-                <View style={styles.aiSnippetRow}>
-                  <Feather name="zap" size={11} color={Palette.indigo600} />
-                  <Text style={styles.aiSnippetLabel}>AI WINGMAN SCENE ADVICE</Text>
-                </View>
-                <Text style={styles.aiSnippetText} numberOfLines={2}>
-                  {currentConvo.messages?.find(m => m.sender === 'ai' && m.sceneContext)?.sceneContext ||
-                    `Wingman ready for ${targetName}. Upload screenshot or type their last text to generate responses!`}
-                </Text>
-              </View>
-            </View>
-
-            {/* Card Footer CTA */}
-            <View style={styles.cardFooter}>
-              <Text style={styles.cardFooterHint}>3 tailored responses ready in studio</Text>
-              <View style={styles.cardCtaBtn}>
-                <Text style={styles.cardCtaBtnText}>Open Chat Studio</Text>
-                <Feather name="arrow-right" size={12} color="#ffffff" />
-              </View>
-            </View>
-          </TouchableOpacity>
-        </View>
-      ) : null)}
-
-      {/* 3. PRIMARY ACTION: START NEW SESSION */}
-      <View style={styles.newSessionActionSection}>
-        <TouchableOpacity
-          style={styles.startSessionPrimaryBtn}
-          onPress={onStartNewSession}
-          activeOpacity={0.88}
-        >
-          <LinearGradient
-            colors={['#18181b', '#27272a']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.startSessionGradient}
-          >
-            <View style={styles.startSessionLeft}>
-              <View style={styles.plusIconSquare}>
-                <Feather name="plus" size={20} color="#ffffff" />
-              </View>
-              <View>
-                <Text style={styles.startSessionTitle}>Start New Session</Text>
-                <Text style={styles.startSessionSubtitle}>
-                  Upload screenshot, paste dialogue, or type
-                </Text>
-              </View>
-            </View>
-
-            <Feather name="arrow-up-right" size={20} color="#ffffff" />
-          </LinearGradient>
-        </TouchableOpacity>
-      </View>
-
-      {/* 4. ACTIVE PERSONALITY PROFILE CONTEXT */}
-      <View style={styles.sectionContainer}>
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionMainHeading}>Active Target Context</Text>
-          <TouchableOpacity onPress={onSwitchProfile} activeOpacity={0.7}>
-            <Text style={styles.switchProfileLink}>Switch Profile →</Text>
-          </TouchableOpacity>
-        </View>
-
-        <TouchableOpacity
-          style={styles.profileContextCard}
-          onPress={() => onOpenConversation(currentConvo)}
-          activeOpacity={0.85}
-        >
-          <View style={styles.profileAvatarLarge}>
-            <Text style={styles.profileAvatarText}>{activeProfile?.avatarEmoji || '❤️'}</Text>
-          </View>
-
-          <View style={styles.profileMainDetails}>
-            <View style={styles.nameAndTagsRow}>
-              <Text style={styles.profileNameTitle}>{targetName}</Text>
-              <View style={styles.contextGenderTag}>
-                <Text style={styles.contextGenderTagText}>{genderLabel}</Text>
-              </View>
-              <View style={styles.contextRelTag}>
-                <Text style={styles.contextRelTagText}>{activeProfile?.relationship || 'Crush'}</Text>
-              </View>
-            </View>
-
-            <Text style={styles.profileSummaryLine}>
-              {activeProfile?.vibeSummary || 'Witty & Reserved (Crush Context)'}
-            </Text>
-
-            {/* Personality Chips */}
-            <View style={styles.traitsChipsRow}>
-              {(activeProfile?.personalityTraits || ['witty', 'reserved', 'sarcastic']).map((trait) => (
-                <View key={trait} style={styles.traitChip}>
-                  <Text style={styles.traitChipText}>#{trait}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-        </TouchableOpacity>
-      </View>
-
-      {/* 5. RECENT SESSIONS HISTORY */}
-      {recentConversations.length > 1 && (
-        <View style={styles.sectionContainer}>
-          <Text style={styles.sectionMainHeading}>Recent Wingman Sessions</Text>
-          <View style={styles.recentSessionsList}>
-            {recentConversations.slice(1, 4).map((c) => (
-              <TouchableOpacity
-                key={c.id}
-                style={styles.recentSessionItemCard}
-                onPress={() => onOpenConversation(c)}
-                activeOpacity={0.85}
-              >
-                <View style={styles.recentLeftIcon}>
-                  <Feather name="message-square" size={16} color={Palette.indigo600} />
-                </View>
-                <View style={styles.recentDetails}>
-                  <View style={styles.recentTopRow}>
-                    <Text style={styles.recentTargetName}>{c.targetName}</Text>
-                    <View style={styles.recentVibeBadge}>
-                      <Text style={styles.recentVibeText}>{c.currentVibe}</Text>
+            {/* START NEW SESSION */}
+            <View style={styles.newSessionActionSection}>
+              <TouchableOpacity style={styles.startSessionPrimaryBtn} onPress={onStartNewSession} activeOpacity={0.88}>
+                <LinearGradient
+                  colors={['#18181b', '#27272a']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.startSessionGradient}
+                >
+                  <View style={styles.startSessionLeft}>
+                    <View style={styles.plusIconSquare}>
+                      <Feather name="plus" size={20} color="#ffffff" />
+                    </View>
+                    <View>
+                      <Text style={styles.startSessionTitle}>Start New Session</Text>
+                      <Text style={styles.startSessionSubtitle}>Upload screenshot, paste dialogue, or type</Text>
                     </View>
                   </View>
-                  <Text style={styles.recentPreviewText} numberOfLines={1}>
-                    "{c.messages?.[c.messages.length - 1]?.text || c.title}"
-                  </Text>
-                </View>
-                <Feather name="chevron-right" size={18} color={Palette.zinc400} />
+                  <Feather name="arrow-up-right" size={20} color="#ffffff" />
+                </LinearGradient>
               </TouchableOpacity>
-            ))}
+            </View>
+
+            {/* ACTIVE PROFILE */}
+            <View style={styles.sectionContainer}>
+              <View style={styles.sectionHeaderRow}>
+                <Text style={styles.sectionMainHeading}>Active Target Context</Text>
+                <TouchableOpacity onPress={onSwitchProfile} activeOpacity={0.7}>
+                  <Text style={styles.switchProfileLink}>Switch Profile →</Text>
+                </TouchableOpacity>
+              </View>
+
+              <TouchableOpacity style={styles.profileContextCard} onPress={onSwitchProfile} activeOpacity={0.85}>
+                <View style={styles.profileAvatarLarge}>
+                  <Text style={styles.profileAvatarText}>{activeProfile.avatarEmoji || '❤️'}</Text>
+                </View>
+                <View style={styles.profileMainDetails}>
+                  <View style={styles.nameAndTagsRow}>
+                    <Text style={styles.profileNameTitle}>{targetName}</Text>
+                    <View style={styles.contextGenderTag}>
+                      <Text style={styles.contextGenderTagText}>{genderLabel}</Text>
+                    </View>
+                    <View style={styles.contextRelTag}>
+                      <Text style={styles.contextRelTagText}>{activeProfile.relationship}</Text>
+                    </View>
+                  </View>
+                  {activeProfile.vibeSummary ? (
+                    <Text style={styles.profileSummaryLine}>{activeProfile.vibeSummary}</Text>
+                  ) : null}
+                  {activeProfile.personalityTraits.length > 0 ? (
+                    <View style={styles.traitsChipsRow}>
+                      {activeProfile.personalityTraits.map((trait) => (
+                        <View key={trait} style={styles.traitChip}>
+                          <Text style={styles.traitChipText}>#{trait}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
+                </View>
+              </TouchableOpacity>
+            </View>
+
+            {/* RECENT SESSIONS */}
+            {otherConvos.length > 0 && (
+              <View style={styles.sectionContainer}>
+                <Text style={styles.sectionMainHeading}>Recent Wingman Sessions</Text>
+                <View style={styles.recentSessionsList}>
+                  {otherConvos.map((c) => {
+                    const last = c.messages[c.messages.length - 1];
+                    return (
+                      <TouchableOpacity
+                        key={c.id}
+                        style={styles.recentSessionItemCard}
+                        onPress={() => onOpenConversation(c)}
+                        activeOpacity={0.85}
+                      >
+                        <View style={styles.recentLeftIcon}>
+                          <Feather name="message-square" size={16} color={Palette.indigo600} />
+                        </View>
+                        <View style={styles.recentDetails}>
+                          <View style={styles.recentTopRow}>
+                            <Text style={styles.recentTargetName}>{c.targetName}</Text>
+                            <View style={styles.recentVibeBadge}>
+                              <Text style={styles.recentVibeText}>{c.currentVibe}</Text>
+                            </View>
+                          </View>
+                          <Text style={styles.recentPreviewText} numberOfLines={1}>
+                            {last ? last.text : c.title}
+                          </Text>
+                        </View>
+                        <Feather name="chevron-right" size={18} color={Palette.zinc400} />
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            )}
+          </>
+        )}
+
+        {/* FEATURES */}
+        <View style={styles.sectionContainer}>
+          <Text style={styles.sectionMainHeading}>Tactical Arsenal</Text>
+          <View style={styles.arsenalRow}>
+            <View style={styles.arsenalCard}>
+              <View style={[styles.arsenalIconCircle, { backgroundColor: '#eff6ff' }]}>
+                <Feather name="zap" size={16} color={Palette.indigo600} />
+              </View>
+              <Text style={styles.arsenalCardTitle}>Vibe Tuning</Text>
+              <Text style={styles.arsenalCardSub}>Flirty, Witty, Playful, Warm</Text>
+            </View>
+            <View style={styles.arsenalCard}>
+              <View style={[styles.arsenalIconCircle, { backgroundColor: '#ecfdf5' }]}>
+                <Feather name="activity" size={16} color={Palette.emerald600} />
+              </View>
+              <Text style={styles.arsenalCardTitle}>Subtext Pulse</Text>
+              <Text style={styles.arsenalCardSub}>Decode interest & intentions</Text>
+            </View>
+            <View style={styles.arsenalCard}>
+              <View style={[styles.arsenalIconCircle, { backgroundColor: '#fdf2f8' }]}>
+                <Feather name="git-branch" size={16} color="#db2777" />
+              </View>
+              <Text style={styles.arsenalCardTitle}>Dialog Trees</Text>
+              <Text style={styles.arsenalCardSub}>If they say X → Say Y</Text>
+            </View>
           </View>
         </View>
-      )}
-
-      {/* 6. WINGMAN TACTICAL ARSENAL (Quick Feature Highlights) */}
-      <View style={styles.sectionContainer}>
-        <Text style={styles.sectionMainHeading}>Tactical Arsenal</Text>
-        <View style={styles.arsenalRow}>
-          <View style={styles.arsenalCard}>
-            <View style={[styles.arsenalIconCircle, { backgroundColor: '#eff6ff' }]}>
-              <Feather name="zap" size={16} color={Palette.indigo600} />
-            </View>
-            <Text style={styles.arsenalCardTitle}>Vibe Tuning</Text>
-            <Text style={styles.arsenalCardSub}>Flirty, Witty, Playful, Warm</Text>
-          </View>
-
-          <View style={styles.arsenalCard}>
-            <View style={[styles.arsenalIconCircle, { backgroundColor: '#ecfdf5' }]}>
-              <Feather name="activity" size={16} color={Palette.emerald600} />
-            </View>
-            <Text style={styles.arsenalCardTitle}>Subtext Pulse</Text>
-            <Text style={styles.arsenalCardSub}>Decode interest & intentions</Text>
-          </View>
-
-          <View style={styles.arsenalCard}>
-            <View style={[styles.arsenalIconCircle, { backgroundColor: '#fdf2f8' }]}>
-              <Feather name="git-branch" size={16} color="#db2777" />
-            </View>
-            <Text style={styles.arsenalCardTitle}>Dialog Trees</Text>
-            <Text style={styles.arsenalCardSub}>If they say X → Say Y</Text>
-          </View>
-        </View>
-      </View>
       </Animated.View>
-
     </ScrollView>
   );
 };
@@ -916,38 +777,53 @@ const styles = StyleSheet.create({
     lineHeight: 14,
   },
 
-  /* SKELETON STYLES */
-  skeletonCard: {
-    backgroundColor: '#f4f4f5',
+  /* EMPTY STATE */
+  emptyCard: {
+    alignItems: 'center',
+    backgroundColor: '#fafafa',
     borderRadius: 18,
-    padding: 20,
     borderWidth: 1,
     borderColor: '#e4e4e7',
-    gap: 12,
+    borderStyle: 'dashed',
+    paddingVertical: 34,
+    paddingHorizontal: 22,
+    marginBottom: 20,
   },
-  skeletonCardSmall: {
-    backgroundColor: '#f4f4f5',
-    borderRadius: 14,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#e4e4e7',
+  emptyIconCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: Palette.indigo50,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 14,
   },
-  skeletonLineTop: {
-    width: '40%',
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: '#e4e4e7',
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: Palette.zinc900,
+    marginBottom: 6,
+    textAlign: 'center',
   },
-  skeletonLineMid: {
-    width: '85%',
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#e4e4e7',
+  emptySub: {
+    fontSize: 13,
+    color: Palette.zinc500,
+    textAlign: 'center',
+    lineHeight: 19,
+    marginBottom: 18,
   },
-  skeletonLineShort: {
-    width: '60%',
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#e4e4e7',
+  emptyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: Palette.zinc900,
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+    borderRadius: 10,
+  },
+  emptyBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#ffffff',
   },
 });

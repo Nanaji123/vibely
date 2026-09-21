@@ -1,5 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
 import {
+  FlatList,
   View,
   Text,
   TouchableOpacity,
@@ -10,6 +11,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   BackHandler,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -29,20 +32,258 @@ import {
   SuggestionOptionModel,
   DialogTreeNodeModel,
 } from '../domain/index';
-import { AIService } from '../services/aiService';
 
 interface ChatStudioScreenProps {
   activeProfile: TargetProfileModel;
   messages: ChatMessageModel[];
   onUpdateMessages: (msgs: ChatMessageModel[]) => void;
   onBack: () => void;
+  hasMoreMessages?: boolean;
+  onLoadEarlier?: () => void;
+  onGenerateReplies: (
+    prompt: string,
+    vibe: string,
+    gender?: string,
+    history?: { sender: string; text: string }[]
+  ) => Promise<{ advice: string; sceneContext: string; suggestions: SuggestionOptionModel[] }>;
+  onChatWithCoach: (
+    message: string,
+    vibe: string,
+    gender?: string
+  ) => Promise<{ advice: string; sceneContext: string; suggestions: SuggestionOptionModel[] }>;
+  onGenerateBranches: (reply: string) => Promise<DialogTreeNodeModel[]>;
+  onExtractChat: (images: string[]) => Promise<{ sender: 'you' | 'them'; text: string }[]>;
+  onSwapSides: (ids: string[]) => Promise<void>;
 }
+
+type ListItem =
+  | { kind: 'msg'; id: string; m: ChatMessageModel }
+  | { kind: 'chat'; id: string; msgs: ChatMessageModel[] };
+
+// Messages read from a screenshot / pasted chat (sender them, or ids starting "t-") render as one chat card
+const isTranscript = (m: ChatMessageModel) => m.sender === 'them' || m.id.startsWith('t-');
+
+const buildItems = (messages: ChatMessageModel[]): ListItem[] => {
+  const items: ListItem[] = [];
+  for (const m of messages) {
+    if (isTranscript(m)) {
+      const last = items[items.length - 1];
+      if (last && last.kind === 'chat') last.msgs.push(m);
+      else items.push({ kind: 'chat', id: 'chat-' + m.id, msgs: [m] });
+    } else {
+      items.push({ kind: 'msg', id: m.id, m });
+    }
+  }
+  return items;
+};
+
+const itemKeyExtractor = (item: ListItem) => item.id;
+
+interface ChatCardProps {
+  msgs: ChatMessageModel[];
+  targetName: string;
+  onSwap: (ids: string[]) => void;
+}
+
+const ChatCard = memo(function ChatCard({ msgs, targetName, onSwap }: ChatCardProps) {
+  return (
+    <View style={styles.chatCard}>
+      <View style={styles.chatCardHeader}>
+        <View style={styles.chatCardAvatar}>
+          <Text style={styles.chatCardAvatarText}>{(targetName.charAt(0) || '?').toUpperCase()}</Text>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.chatCardTitle} numberOfLines={1}>
+            Chat with {targetName}
+          </Text>
+          <Text style={styles.chatCardSub}>{msgs.length} messages</Text>
+        </View>
+        <TouchableOpacity
+          style={styles.swapBtn}
+          onPress={() => onSwap(msgs.map((m) => m.id))}
+          activeOpacity={0.75}
+        >
+          <Feather name="repeat" size={11} color={Palette.zinc700} />
+          <Text style={styles.swapBtnText}>Swap sides</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.chatCardBody}>
+        {msgs.map((m, i) => {
+          const isYou = m.sender === 'you';
+          const startsRun = i === 0 || msgs[i - 1].sender !== m.sender;
+          return (
+            <View key={m.id} style={[styles.chatLine, isYou ? styles.chatLineYou : styles.chatLineThem]}>
+              {startsRun ? (
+                <Text style={[styles.chatWho, isYou && styles.chatWhoYou]}>{isYou ? 'You' : targetName}</Text>
+              ) : null}
+              <View style={[styles.chatBubbleCard, isYou ? styles.chatBubbleCardYou : styles.chatBubbleCardThem]}>
+                <Text style={[styles.chatBubbleCardText, isYou && styles.chatBubbleCardTextYou]}>{m.text}</Text>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+});
+
+interface MessageBubbleProps {
+  m: ChatMessageModel;
+  selectedGenre: string;
+  targetName: string;
+  copiedId: string | null;
+  onCopy: (option: SuggestionOptionModel) => void;
+  onOpenBranching: (option: SuggestionOptionModel) => void;
+  onSelect: (aiMsgId: string, option: SuggestionOptionModel) => void;
+}
+
+const MessageBubble = memo(function MessageBubble({
+  m,
+  selectedGenre,
+  targetName,
+  copiedId,
+  onCopy,
+  onOpenBranching,
+  onSelect,
+}: MessageBubbleProps) {
+  const isYou = m.sender === 'you';
+  const isAi = m.sender === 'ai';
+
+  return (
+      <View
+        key={m.id}
+        style={[styles.messageRow, isYou ? styles.rowYou : styles.rowAi]}
+      >
+        <View
+          style={[
+            styles.chatBubble,
+            isYou ? styles.bubbleYou : styles.bubbleAi,
+          ]}
+        >
+          {/* AI Header with Icon inside bubble */}
+          {isAi && (
+            <View style={styles.aiBubbleHeader}>
+              <View style={styles.aiAvatarBox}>
+                <Feather name="zap" size={12} color="#ffffff" />
+              </View>
+              <Text style={styles.aiBubbleHeaderTitle}>Vibely AI Wingman</Text>
+            </View>
+          )}
+
+          {/* 1. Scene Analysis / Subtext Context (if provided by AI) */}
+          {m.sceneContext && (
+            <View style={styles.sceneContextCard}>
+              <View style={styles.sceneContextBadgeRow}>
+                <Feather name="eye" size={11} color={Palette.indigo600} />
+                <Text style={styles.sceneContextTitle}>SCENE BREAKDOWN & SIGNALS</Text>
+              </View>
+              <Text style={styles.sceneContextBody}>{m.sceneContext}</Text>
+            </View>
+          )}
+
+          {/* 2. Main Message Body */}
+          <Text style={[styles.bubbleMessageText, isYou && styles.bubbleMessageTextYou]}>
+            {m.text}
+          </Text>
+
+          {/* 3. Three Tailored Reply Suggestions in Selected Genre & Gender */}
+          {m.suggestions && m.suggestions.length > 0 && (
+            <View style={styles.suggestionsContainer}>
+              {/* If user already picked one, ONLY SHOW the chosen one! Other suggestions vanish! */}
+              {m.selectedSuggestionId ? (
+                <View style={styles.chosenOptionBanner}>
+                  <Feather name="check-circle" size={13} color={Palette.emerald600} />
+                  <Text style={styles.chosenOptionBannerText}>
+                    You selected & sent Option {m.suggestions.findIndex(s => s.id === m.selectedSuggestionId) + 1}
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  <View style={styles.suggestionsHeader}>
+                    <View style={styles.suggestionsHeaderBadge}>
+                      <Feather name="message-circle" size={11} color={Palette.indigo600} />
+                      <Text style={styles.suggestionsHeaderTitle}>
+                        3 {selectedGenre.toUpperCase()} OPTIONS TO SAY:
+                      </Text>
+                    </View>
+                    <Text style={styles.suggestionsHeaderSub}>Tap one to send to {targetName}</Text>
+                  </View>
+
+                  <View style={styles.suggestionCardsList}>
+                    {m.suggestions.map((opt, idx) => {
+                      const isCopied = copiedId === opt.id;
+                      return (
+                        <View key={opt.id} style={styles.suggestionCard}>
+                          <View style={styles.suggestionCardTop}>
+                            <View style={styles.variantBadge}>
+                              <Text style={styles.variantBadgeNumber}>{idx + 1}</Text>
+                              <Text style={styles.variantBadgeText} numberOfLines={1}>{opt.category}</Text>
+                            </View>
+
+                            <View style={styles.cardActionsRow}>
+                              {/* Copy to Clipboard */}
+                              <TouchableOpacity
+                                style={styles.iconCircle}
+                                onPress={() => onCopy(opt)}
+                                activeOpacity={0.75}
+                              >
+                                <Feather
+                                  name={isCopied ? 'check' : 'copy'}
+                                  size={12}
+                                  color={isCopied ? Palette.emerald600 : Palette.zinc600}
+                                />
+                              </TouchableOpacity>
+
+                              {/* Next turn branch */}
+                              <TouchableOpacity
+                                style={styles.iconCircle}
+                                onPress={() => onOpenBranching(opt)}
+                                activeOpacity={0.75}
+                              >
+                                <Feather name="git-branch" size={12} color={Palette.indigo600} />
+                              </TouchableOpacity>
+                            </View>
+                          </View>
+
+                          {/* Quote Text */}
+                          <Text style={styles.suggestionQuoteText}>"{opt.replyText}"</Text>
+                          {opt.toneVariant ? <Text style={styles.suggestionWhyText}>{opt.toneVariant}</Text> : null}
+
+                          {/* Select & Send Action Button */}
+                          <TouchableOpacity
+                            style={styles.selectOptionBtn}
+                            onPress={() => onSelect(m.id, opt)}
+                            activeOpacity={0.85}
+                          >
+                            <Feather name="send" size={12} color="#ffffff" />
+                            <Text style={styles.selectOptionBtnText}>I Sent This One</Text>
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    })}
+                  </View>
+                </>
+              )}
+            </View>
+          )}
+        </View>
+      </View>
+  );
+});
 
 export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
   activeProfile,
   messages,
   onUpdateMessages,
   onBack,
+  hasMoreMessages = false,
+  onLoadEarlier,
+  onGenerateReplies,
+  onChatWithCoach,
+  onGenerateBranches,
+  onExtractChat,
+  onSwapSides,
 }) => {
   const [inputText, setInputText] = useState('');
   const [selectedGenre, setSelectedGenre] = useState<string>('flirty');
@@ -60,14 +301,23 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
   // Branching Scenario Modal
   const [branchingReply, setBranchingReply] = useState<SuggestionOptionModel | null>(null);
   const [branchScenarios, setBranchScenarios] = useState<DialogTreeNodeModel[]>([]);
+  const [branchLoading, setBranchLoading] = useState(false);
 
-  const scrollViewRef = useRef<ScrollView>(null);
+  const scrollViewRef = useRef<FlatList<ListItem>>(null);
   const isInitialScrollDone = useRef(false);
   const thinkingPulseAnim = useSharedValue(1);
 
-  // Reset initial scroll status on component mount or activeProfile change
+  // Always holds the latest props/state so memoized handlers stay referentially stable
+  const latest = useRef({ messages, onUpdateMessages, onGenerateBranches, name: activeProfile.name, targetGender });
+  latest.current = { messages, onUpdateMessages, onGenerateBranches, name: activeProfile.name, targetGender };
+
+  // Keep snapping to the bottom while the list lays out its first batches, then stop
   useEffect(() => {
     isInitialScrollDone.current = false;
+    const timer = setTimeout(() => {
+      isInitialScrollDone.current = true;
+    }, 700);
+    return () => clearTimeout(timer);
   }, [activeProfile.id]);
 
   useEffect(() => {
@@ -117,6 +367,34 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
     setTargetGender(nextGender);
   };
 
+  // Real AI: read the scene and generate suggestions in the selected vibe (and the chat's language)
+  const askCoach = (
+    request: () => Promise<{ advice: string; sceneContext: string; suggestions: SuggestionOptionModel[] }>,
+    base: ChatMessageModel[]
+  ) => {
+    setIsAiThinking(true);
+    setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+    return request()
+      .then((coachResp) => {
+        const aiMsg: ChatMessageModel = {
+          id: 'm-ai-' + Date.now(),
+          sender: 'ai',
+          text: coachResp.advice,
+          ...(coachResp.sceneContext ? { sceneContext: coachResp.sceneContext } : {}),
+          ...(coachResp.suggestions.length > 0 ? { suggestions: coachResp.suggestions } : {}),
+          timestamp: 'Just now',
+        };
+        onUpdateMessages([...base, aiMsg]);
+      })
+      .catch((err) => {
+        Alert.alert('Vibely AI could not answer', err instanceof Error ? err.message : 'Please try again.');
+      })
+      .finally(() => {
+        setIsAiThinking(false);
+        setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 150);
+      });
+  };
+
   // When user sends a message to Vibely AI about the target's conversation
   const handleSendMessage = () => {
     if (!inputText.trim()) return;
@@ -133,46 +411,17 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
     const updatedWithUser = [...messages, userMsg];
     onUpdateMessages(updatedWithUser);
 
-    setIsAiThinking(true);
-    setTimeout(() => {
-      scrollViewRef.current?.scrollToEnd({ animated: true });
-    }, 100);
-
-    // AI Wingman analyzes the scene and formulates advice + 3 suggestions in the selected genre & gender
-    setTimeout(() => {
-      const coachResp = AIService.generateCoachSceneResponse(
-        prompt,
-        selectedGenre,
-        activeProfile.relationship,
-        activeProfile.name,
-        targetGender
-      );
-
-      const aiMsg: ChatMessageModel = {
-        id: `m-ai-${Date.now()}`,
-        sender: 'ai',
-        text: coachResp.advice,
-        sceneContext: coachResp.sceneContext,
-        suggestions: coachResp.suggestions,
-        timestamp: 'Just now',
-      };
-
-      onUpdateMessages([...updatedWithUser, aiMsg]);
-      setIsAiThinking(false);
-
-      setTimeout(() => {
-        scrollViewRef.current?.scrollToEnd({ animated: true });
-      }, 150);
-    }, 450);
+    askCoach(() => onChatWithCoach(prompt, selectedGenre, targetGender), updatedWithUser);
   };
 
   // User SELECTS / SENDS one of the 3 AI suggestions:
   // 1. Marks selectedSuggestionId on that AI message (so other suggestions vanish and don't still show!)
   // 2. Logs user's confirmation in the chat
   // 3. AI acknowledges with follow-up encouragement
-  const handleSelectSuggestion = (aiMsgId: string, option: SuggestionOptionModel) => {
+  const handleSelectSuggestion = useCallback((aiMsgId: string, option: SuggestionOptionModel) => {
+    const { messages: current, onUpdateMessages: update, name, targetGender: gender } = latest.current;
     // Hide other suggestions from this AI message
-    const updatedMessages = messages.map(m => {
+    const updatedMessages = current.map(m => {
       if (m.id === aiMsgId) {
         return {
           ...m,
@@ -190,67 +439,125 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
     };
 
     const nextBatch = [...updatedMessages, userSentMsg];
-    onUpdateMessages(nextBatch);
+    update(nextBatch);
 
     setIsAiThinking(true);
     setTimeout(() => {
       const aiFollowUp: ChatMessageModel = {
         id: `m-ai-${Date.now()}`,
         sender: 'ai',
-        text: `🔥 High confidence move! That puts the momentum squarely in ${activeProfile.name}'s court. When ${targetGender === 'female' ? 'she' : 'he'} replies back, just type what ${targetGender === 'female' ? 'she' : 'he'} said or upload a screenshot!`,
+        text: `🔥 High confidence move! That puts the momentum squarely in ${name}'s court. When ${gender === 'female' ? 'she' : 'he'} replies back, just type what ${gender === 'female' ? 'she' : 'he'} said or upload a screenshot!`,
         timestamp: 'Just now',
       };
-      onUpdateMessages([...nextBatch, aiFollowUp]);
+      latest.current.onUpdateMessages([...nextBatch, aiFollowUp]);
       setIsAiThinking(false);
 
       setTimeout(() => {
         scrollViewRef.current?.scrollToEnd({ animated: true });
       }, 150);
     }, 400);
-  };
+  }, []);
 
   // Copy with Visual Toast
-  const handleCopy = async (option: SuggestionOptionModel) => {
+  const handleCopy = useCallback(async (option: SuggestionOptionModel) => {
     try {
       await Clipboard.setStringAsync(option.replyText);
-      setCopiedId(option.id);
-      setTimeout(() => setCopiedId(null), 2000);
     } catch (e) {
-      setCopiedId(option.id);
-      setTimeout(() => setCopiedId(null), 2000);
+      // clipboard unavailable: still show the confirmation state
     }
-  };
+    setCopiedId(option.id);
+    setTimeout(() => setCopiedId(null), 2000);
+  }, []);
 
   // Open Branching Next Turn Preview
-  const handleOpenBranching = (option: SuggestionOptionModel) => {
+  const handleOpenBranching = useCallback(async (option: SuggestionOptionModel) => {
     setBranchingReply(option);
-    const nodes = AIService.generateContinueTree(option.replyText);
-    setBranchScenarios(nodes);
-  };
+    setBranchScenarios([]);
+    setBranchLoading(true);
+    try {
+      setBranchScenarios(await latest.current.onGenerateBranches(option.replyText));
+    } catch (err) {
+      setBranchingReply(null);
+      Alert.alert('Could not predict replies', err instanceof Error ? err.message : 'Please try again.');
+    } finally {
+      setBranchLoading(false);
+    }
+  }, []);
 
-  // Screenshot Picker
+  const items = useMemo(() => buildItems(messages), [messages]);
+
+  const handleSwap = useCallback((ids: string[]) => {
+    onSwapSides(ids).catch((err) =>
+      Alert.alert('Could not swap sides', err instanceof Error ? err.message : 'Please try again.')
+    );
+  }, [onSwapSides]);
+
+  const renderMessage = useCallback(
+    ({ item }: { item: ListItem }) =>
+      item.kind === 'chat' ? (
+        <ChatCard msgs={item.msgs} targetName={activeProfile.name} onSwap={handleSwap} />
+      ) : (
+        <MessageBubble
+          m={item.m}
+          selectedGenre={selectedGenre}
+          targetName={activeProfile.name}
+          copiedId={item.m.suggestions?.some((s) => s.id === copiedId) ? copiedId : null}
+          onCopy={handleCopy}
+          onOpenBranching={handleOpenBranching}
+          onSelect={handleSelectSuggestion}
+        />
+      ),
+    [selectedGenre, activeProfile.name, copiedId, handleCopy, handleOpenBranching, handleSelectSuggestion, handleSwap]
+  );
+
+  // Screenshot Picker: reads the chat from the image and fills the input with their last message
   const handlePickScreenshot = async () => {
     setShowPlusMenu(false);
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
-        allowsEditing: true,
-        quality: 0.8,
+        allowsEditing: false,
+        quality: 0.5,
+        base64: true,
       });
+      if (result.canceled || !result.assets?.[0]?.base64) return;
 
-      if (!result.canceled && result.assets && result.assets[0]) {
-        const prompt = `[Uploaded screenshot of chat with ${activeProfile.name}] "Probably just staying home lol"`;
-        setInputText(prompt);
+      setIsAiThinking(true);
+      const transcript = await onExtractChat(['data:image/jpeg;base64,' + result.assets[0].base64]);
+      if (transcript.length === 0) {
+        Alert.alert('Nothing to read', "Couldn't read any messages in that screenshot. Try a clearer one.");
+        return;
       }
-    } catch (e) {
-      // Ignore cancellation or permissions denial
+      const recent = transcript.slice(-40);
+      const stamp = Date.now();
+      const transcriptMsgs: ChatMessageModel[] = recent.map((m, i) => ({
+        id: 't-' + stamp + '-' + i,
+        sender: m.sender,
+        text: m.text,
+      }));
+      const base = [...latest.current.messages, ...transcriptMsgs];
+      onUpdateMessages(base);
+
+      const lastThem = [...recent].reverse().find((m) => m.sender === 'them');
+      if (!lastThem) {
+        Alert.alert(
+          'Nothing from ' + activeProfile.name + ' yet',
+          "There's no message from them to answer. If the sides look reversed, tap Swap sides on the chat card."
+        );
+        return;
+      }
+      await askCoach(() => onGenerateReplies(lastThem.text, selectedGenre, targetGender, recent), base);
+    } catch (err) {
+      Alert.alert('Could not read screenshot', err instanceof Error ? err.message : 'Please try again.');
+    } finally {
+      setIsAiThinking(false);
     }
   };
 
   // Paste Dialogue
   const handlePasteSubmit = () => {
     if (!pasteInputText.trim()) return;
-    setInputText(`She said: "${pasteInputText.trim()}"`);
+    setInputText(`${targetGender === 'male' ? 'He' : targetGender === 'other' ? 'They' : 'She'} said: "${pasteInputText.trim()}"`);
     setShowPasteModal(false);
     setPasteInputText('');
   };
@@ -330,171 +637,65 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
       </View>
 
       {/* 2. CHAT STREAM BETWEEN USER & VIBELY AI COACH */}
-      <ScrollView
+      <FlatList
         ref={scrollViewRef}
+        data={items}
+        extraData={`${selectedGenre}|${copiedId}|${activeProfile.name}`}
+        keyExtractor={itemKeyExtractor}
+        renderItem={renderMessage}
         style={styles.chatScroll}
         contentContainerStyle={styles.chatContent}
         keyboardShouldPersistTaps="handled"
+        initialNumToRender={10}
+        maxToRenderPerBatch={6}
+        windowSize={9}
         onContentSizeChange={() => {
           if (!isInitialScrollDone.current) {
             scrollViewRef.current?.scrollToEnd({ animated: false });
-            isInitialScrollDone.current = true;
           }
         }}
-      >
-        <View style={styles.dateStampContainer}>
-          <View style={styles.dateStampBadge}>
-            <Text style={styles.dateStampText}>
-              Wingman Session • Strategy for {activeProfile.name} ({genderLabel})
-            </Text>
-          </View>
-        </View>
-
-        {/* Message Thread */}
-        {messages.map((m) => {
-          const isYou = m.sender === 'you';
-          const isAi = m.sender === 'ai';
-
-          return (
-            <View
-              key={m.id}
-              style={[styles.messageRow, isYou ? styles.rowYou : styles.rowAi]}
-            >
-              <View
-                style={[
-                  styles.chatBubble,
-                  isYou ? styles.bubbleYou : styles.bubbleAi,
-                ]}
+        ListHeaderComponent={
+          <View style={styles.dateStampContainer}>
+            {hasMoreMessages && onLoadEarlier ? (
+              <TouchableOpacity
+                style={[styles.dateStampBadge, { marginBottom: 8 }]}
+                onPress={() => {
+                  // Older messages are prepended: stop the auto-snap to bottom while they load
+                  isInitialScrollDone.current = true;
+                  onLoadEarlier();
+                }}
+                activeOpacity={0.7}
               >
-                {/* AI Header with Icon inside bubble */}
-                {isAi && (
+                <Text style={styles.dateStampText}>Load earlier messages</Text>
+              </TouchableOpacity>
+            ) : null}
+            <View style={styles.dateStampBadge}>
+              <Text style={styles.dateStampText}>
+                Wingman Session • Strategy for {activeProfile.name} ({genderLabel})
+              </Text>
+            </View>
+          </View>
+        }
+        ListFooterComponent={
+          isAiThinking ? (
+            <Animated.View style={thinkingPulseStyle}>
+              <View style={[styles.messageRow, styles.rowAi]}>
+                <View style={[styles.chatBubble, styles.bubbleAi, styles.thinkingBubble]}>
                   <View style={styles.aiBubbleHeader}>
                     <View style={styles.aiAvatarBox}>
                       <Feather name="zap" size={12} color="#ffffff" />
                     </View>
                     <Text style={styles.aiBubbleHeaderTitle}>Vibely AI Wingman</Text>
                   </View>
-                )}
-
-                {/* 1. Scene Analysis / Subtext Context (if provided by AI) */}
-                {m.sceneContext && (
-                  <View style={styles.sceneContextCard}>
-                    <View style={styles.sceneContextBadgeRow}>
-                      <Feather name="eye" size={11} color={Palette.indigo600} />
-                      <Text style={styles.sceneContextTitle}>SCENE BREAKDOWN & SIGNALS</Text>
-                    </View>
-                    <Text style={styles.sceneContextBody}>{m.sceneContext}</Text>
-                  </View>
-                )}
-
-                {/* 2. Main Message Body */}
-                <Text style={[styles.bubbleMessageText, isYou && styles.bubbleMessageTextYou]}>
-                  {m.text}
-                </Text>
-
-                {/* 3. Three Tailored Reply Suggestions in Selected Genre & Gender */}
-                {m.suggestions && m.suggestions.length > 0 && (
-                  <View style={styles.suggestionsContainer}>
-                    {/* If user already picked one, ONLY SHOW the chosen one! Other suggestions vanish! */}
-                    {m.selectedSuggestionId ? (
-                      <View style={styles.chosenOptionBanner}>
-                        <Feather name="check-circle" size={13} color={Palette.emerald600} />
-                        <Text style={styles.chosenOptionBannerText}>
-                          You selected & sent Option {m.suggestions.findIndex(s => s.id === m.selectedSuggestionId) + 1}
-                        </Text>
-                      </View>
-                    ) : (
-                      <>
-                        <View style={styles.suggestionsHeader}>
-                          <View style={styles.suggestionsHeaderBadge}>
-                            <Feather name="message-circle" size={11} color={Palette.indigo600} />
-                            <Text style={styles.suggestionsHeaderTitle}>
-                              3 {selectedGenre.toUpperCase()} OPTIONS TO SAY:
-                            </Text>
-                          </View>
-                          <Text style={styles.suggestionsHeaderSub}>Tap one to send to {activeProfile.name}</Text>
-                        </View>
-
-                        <View style={styles.suggestionCardsList}>
-                          {m.suggestions.map((opt, idx) => {
-                            const isCopied = copiedId === opt.id;
-                            return (
-                              <View key={opt.id} style={styles.suggestionCard}>
-                                <View style={styles.suggestionCardTop}>
-                                  <View style={styles.variantBadge}>
-                                    <Text style={styles.variantBadgeNumber}>{idx + 1}</Text>
-                                    <Text style={styles.variantBadgeText}>{opt.toneVariant}</Text>
-                                  </View>
-
-                                  <View style={styles.cardActionsRow}>
-                                    {/* Copy to Clipboard */}
-                                    <TouchableOpacity
-                                      style={styles.iconCircle}
-                                      onPress={() => handleCopy(opt)}
-                                      activeOpacity={0.75}
-                                    >
-                                      <Feather
-                                        name={isCopied ? 'check' : 'copy'}
-                                        size={12}
-                                        color={isCopied ? Palette.emerald600 : Palette.zinc600}
-                                      />
-                                    </TouchableOpacity>
-
-                                    {/* Next turn branch */}
-                                    <TouchableOpacity
-                                      style={styles.iconCircle}
-                                      onPress={() => handleOpenBranching(opt)}
-                                      activeOpacity={0.75}
-                                    >
-                                      <Feather name="git-branch" size={12} color={Palette.indigo600} />
-                                    </TouchableOpacity>
-                                  </View>
-                                </View>
-
-                                {/* Quote Text */}
-                                <Text style={styles.suggestionQuoteText}>"{opt.replyText}"</Text>
-
-                                {/* Select & Send Action Button */}
-                                <TouchableOpacity
-                                  style={styles.selectOptionBtn}
-                                  onPress={() => handleSelectSuggestion(m.id, opt)}
-                                  activeOpacity={0.85}
-                                >
-                                  <Feather name="send" size={12} color="#ffffff" />
-                                  <Text style={styles.selectOptionBtnText}>I Sent This One</Text>
-                                </TouchableOpacity>
-                              </View>
-                            );
-                          })}
-                        </View>
-                      </>
-                    )}
-                  </View>
-                )}
-              </View>
-            </View>
-          );
-        })}
-
-        {/* AI Thinking Indicator */}
-        {isAiThinking && (
-          <Animated.View style={thinkingPulseStyle}>
-            <View style={[styles.messageRow, styles.rowAi]}>
-              <View style={[styles.chatBubble, styles.bubbleAi, styles.thinkingBubble]}>
-                <View style={styles.aiBubbleHeader}>
-                  <View style={styles.aiAvatarBox}>
-                    <Feather name="zap" size={12} color="#ffffff" />
-                  </View>
-                  <Text style={styles.aiBubbleHeaderTitle}>Vibely AI Wingman</Text>
+                  <Text style={styles.thinkingText}>
+                    Vibely AI is thinking about your chat with {activeProfile.name}...
+                  </Text>
                 </View>
-                <Text style={styles.thinkingText}>
-                  Vibely AI is decoding {activeProfile.name}'s signals & crafting 3 {selectedGenre} options...
-                </Text>
               </View>
-            </View>
-          </Animated.View>
-        )}
-      </ScrollView>
+            </Animated.View>
+          ) : null
+        }
+      />
 
       {/* 3. GENRE / VIBE SELECTOR STRIP (Switch vibe anytime) */}
       <View style={styles.genreStripContainer}>
@@ -580,7 +781,7 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
           style={styles.chatTextInput}
           value={inputText}
           onChangeText={setInputText}
-          placeholder={`Tell AI what ${activeProfile.name} said (e.g. She said: ...)`}
+          placeholder={`Ask your wingman, or tell what ${activeProfile.name} said`}
           placeholderTextColor={Palette.zinc400}
           onSubmitEditing={handleSendMessage}
           returnKeyType="send"
@@ -710,7 +911,7 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
                 value={pasteInputText}
                 onChangeText={setPasteInputText}
                 multiline
-                placeholder="e.g. Probably just staying home lol"
+                placeholder={`What did ${activeProfile.name} say?`}
                 placeholderTextColor={Palette.zinc400}
               />
 
@@ -745,6 +946,13 @@ export const ChatStudioScreen: React.FC<ChatStudioScreenProps> = ({
               <Text style={[styles.sectionHeading, { marginTop: 14, marginBottom: 8 }]}>
                 Counter-Scenarios:
               </Text>
+
+              {branchLoading ? (
+                <View style={{ paddingVertical: 24, alignItems: 'center', gap: 8 }}>
+                  <ActivityIndicator color={Palette.indigo600} />
+                  <Text style={styles.branchModalSub}>Predicting how {activeProfile.name} might reply...</Text>
+                </View>
+              ) : null}
 
               {branchScenarios.map((node, idx) => (
                 <View key={node.id} style={styles.scenarioCard}>
@@ -953,6 +1161,113 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
 
+  /* CHAT CARD (their messages left, yours right) */
+  chatCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 14,
+    overflow: 'hidden',
+    ...ThemeShadows.sm,
+  },
+  chatCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  chatCardAvatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: Palette.indigo50,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  chatCardAvatarText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: Palette.indigo600,
+  },
+  chatCardTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: Palette.zinc900,
+  },
+  chatCardSub: {
+    fontSize: 10.5,
+    color: Palette.zinc500,
+  },
+  swapBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: Palette.zinc100,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  swapBtnText: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: Palette.zinc700,
+  },
+  chatCardBody: {
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 4,
+  },
+  chatLine: {
+    maxWidth: '82%',
+  },
+  chatLineThem: {
+    alignSelf: 'flex-start',
+    alignItems: 'flex-start',
+  },
+  chatLineYou: {
+    alignSelf: 'flex-end',
+    alignItems: 'flex-end',
+  },
+  chatWho: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: Palette.zinc500,
+    marginTop: 6,
+    marginBottom: 2,
+    marginHorizontal: 4,
+  },
+  chatWhoYou: {
+    color: Palette.indigo600,
+  },
+  chatBubbleCard: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 16,
+  },
+  chatBubbleCardThem: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderTopLeftRadius: 4,
+  },
+  chatBubbleCardYou: {
+    backgroundColor: Palette.zinc900,
+    borderTopRightRadius: 4,
+  },
+  chatBubbleCardText: {
+    fontSize: 14,
+    color: Palette.zinc900,
+    lineHeight: 20,
+  },
+  chatBubbleCardTextYou: {
+    color: '#ffffff',
+  },
+
   /* SCENE CONTEXT CARD */
   sceneContextCard: {
     backgroundColor: '#eff6ff',
@@ -1027,6 +1342,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
+    flex: 1,
+    minWidth: 0,
+    marginRight: 8,
   },
   variantBadgeNumber: {
     backgroundColor: Palette.zinc900,
@@ -1041,11 +1359,20 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     fontWeight: '700',
     color: Palette.indigo600,
+    flexShrink: 1,
   },
   cardActionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
+    flexShrink: 0,
+  },
+  suggestionWhyText: {
+    fontSize: 11,
+    color: Palette.zinc500,
+    lineHeight: 15,
+    marginTop: -2,
+    marginBottom: 8,
   },
   iconCircle: {
     width: 24,

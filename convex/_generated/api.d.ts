@@ -14,6 +14,7 @@ import type * as conversations from "../conversations.js";
 import type * as http from "../http.js";
 import type * as profiles from "../profiles.js";
 import type * as subscriptions from "../subscriptions.js";
+import type * as userProfiles from "../userProfiles.js";
 
 import type {
   ApiFromModules,
@@ -28,6 +29,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   profiles: typeof profiles;
   subscriptions: typeof subscriptions;
+  userProfiles: typeof userProfiles;
 }>;
 
 /**

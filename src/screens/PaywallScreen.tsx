@@ -6,7 +6,9 @@ import Animated, {
   withRepeat,
   withSequence,
   withTiming,
+  cancelAnimation,
 } from 'react-native-reanimated';
+import { useIsFocused } from '@react-navigation/native';
 import { Feather } from '@expo/vector-icons';
 import { Palette, ThemeColors } from '../theme/colors';
 import { ThemeShadows } from '../theme/shadows';
@@ -25,13 +27,24 @@ export const PaywallScreen: React.FC<PaywallScreenProps> = ({
   const entranceAnim = useSharedValue(0);
   const pulseAnim = useSharedValue(1);
 
+  const isFocused = useIsFocused();
+
   useEffect(() => {
     entranceAnim.value = withTiming(1, { duration: 350 });
-    pulseAnim.value = withRepeat(
-      withSequence(withTiming(1.02, { duration: 900 }), withTiming(1, { duration: 900 })),
-      -1
-    );
   }, []);
+
+  // Tabs stay mounted when unfocused; only run the CTA pulse while this tab is visible
+  useEffect(() => {
+    if (isFocused) {
+      pulseAnim.value = withRepeat(
+        withSequence(withTiming(1.02, { duration: 900 }), withTiming(1, { duration: 900 })),
+        -1
+      );
+    } else {
+      cancelAnimation(pulseAnim);
+      pulseAnim.value = 1;
+    }
+  }, [isFocused]);
 
   const entranceStyle = useAnimatedStyle(() => ({ opacity: entranceAnim.value }));
   const pulseStyle = useAnimatedStyle(() => ({ transform: [{ scale: pulseAnim.value }] }));

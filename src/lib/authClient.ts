@@ -11,6 +11,9 @@ export const authClient = createAuthClient({
       scheme: (Constants.expoConfig?.scheme as string) ?? "vibely",
       storagePrefix: (Constants.expoConfig?.scheme as string) ?? "vibely",
       storage: SecureStore,
+      // Open the sign-in page inside the app's own task. A separate Android task can keep an old
+      // Google page alive in Recents, and picking an account there replays a used-up state.
+      webBrowserOptions: { createTask: false },
     }),
     convexClient(),
   ],

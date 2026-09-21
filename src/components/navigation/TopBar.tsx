@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -28,9 +28,29 @@ export interface WingmanNotification {
   isUnread: boolean;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const formatAgo = (ms: number) => {
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 60) return `${Math.max(minutes, 1)}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+};
+
 export const TopBar: React.FC = () => {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const { activeProfile, profiles, subscription, conversations, selectProfile, loadConversation } = useApp();
+  const { activeProfile, profiles, subscription, conversations, selectProfile, loadConversation, account } = useApp();
+
+  const accountName = account?.displayName || account?.googleName || 'Vibely user';
+  const accountEmail = account?.email ?? '';
+  const accountInitials =
+    accountName
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0].toUpperCase())
+      .join('') || 'V';
 
   const onSelectProfile = selectProfile;
   const onOpenPro = () => navigation.navigate('Main', { screen: 'Pro' });
@@ -48,50 +68,56 @@ export const TopBar: React.FC = () => {
   // Notification Preferences Toggles
   const [prefFollowups, setPrefFollowups] = useState(true);
   const [prefSignals, setPrefSignals] = useState(true);
-  const [prefDailyAdvice, setPrefDailyAdvice] = useState(false);
 
-  // In-App Wingman Notifications List
-  const [notifications, setNotifications] = useState<WingmanNotification[]>([
-    {
-      id: 'notif-1',
-      type: 'followup',
-      targetName: 'Sarah',
-      timeAgo: '1d ago',
-      title: '⚠️ Unanswered Message Alert',
-      message:
-        "Have you messaged Sarah? It's already been 1 day since she said 'Probably just staying home lol'. She may think you're not interested! Send a teasing check-in.",
-      isUnread: true,
-    },
-    {
-      id: 'notif-2',
-      type: 'signal',
-      targetName: 'Laxmi',
-      timeAgo: '2h ago',
-      title: '🔥 Hot Signal Alert',
-      message:
-        "Laxmi replied in under 3 minutes with 'haha maybe 😂'! Her interest is peaked right now. Don't wait too long to counter.",
-      isUnread: true,
-    },
-    {
-      id: 'notif-3',
-      type: 'tip',
-      targetName: 'General',
-      timeAgo: '5h ago',
-      title: '🧠 Effort Ratio Check',
-      message:
-        'Great job keeping your conversation effort balanced at 48% vs 52%. Your texts are high-value and concise.',
-      isUnread: false,
-    },
-  ]);
+  // Alerts are derived from the user's real conversations (no seeded data)
+  const [readIds, setReadIds] = useState<Set<string>>(new Set());
 
-  const unreadCount = notifications.filter(n => n.isUnread).length;
+  const allNotifications = useMemo<WingmanNotification[]>(() => {
+    const now = Date.now();
+    const items: WingmanNotification[] = [];
+    for (const c of conversations) {
+      const ageMs = now - new Date(c.updatedAt).getTime();
+      if (ageMs > DAY_MS) {
+        const id = `stale-${c.id}-${c.updatedAt}`;
+        items.push({
+          id,
+          type: 'followup',
+          targetName: c.targetName,
+          timeAgo: formatAgo(ageMs),
+          title: '⏰ Follow-up nudge',
+          message: `It's been ${formatAgo(ageMs)} since your last chat with ${c.targetName}. A quick check-in keeps the momentum going.`,
+          isUnread: !readIds.has(id),
+        });
+      }
+      const interest = c.analysis?.interestScore;
+      if (interest !== undefined && interest >= 75) {
+        const id = `signal-${c.id}-${interest}`;
+        items.push({
+          id,
+          type: 'signal',
+          targetName: c.targetName,
+          timeAgo: formatAgo(ageMs),
+          title: '🔥 High interest',
+          message: `Your latest analysis shows ${c.targetName}'s interest at ${interest}%. Now is a good time to keep the conversation moving.`,
+          isUnread: !readIds.has(id),
+        });
+      }
+    }
+    return items;
+  }, [conversations, readIds]);
 
+  const notifications = allNotifications.filter(
+    (n) => (n.type === 'followup' ? prefFollowups : prefSignals)
+  );
+  const unreadCount = notifications.filter((n) => n.isUnread).length;
+
+  const hasProfiles = profiles.length > 0;
   const genderBadge =
     activeProfile.gender === 'female' ? '👩' : activeProfile.gender === 'male' ? '👨' : '🧑';
 
   // Mark all notifications as read
   const handleMarkAllRead = () => {
-    setNotifications(prev => prev.map(n => ({ ...n, isUnread: false })));
+    setReadIds(new Set(allNotifications.map((n) => n.id)));
   };
 
   // Open conversation from notification
@@ -130,14 +156,27 @@ export const TopBar: React.FC = () => {
         {/* In-place Profile Switcher Button */}
         <TouchableOpacity
           style={styles.profilePill}
-          onPress={() => setShowProfileSwitcher(true)}
+          onPress={() =>
+            hasProfiles ? setShowProfileSwitcher(true) : navigation.navigate('Main', { screen: 'Profiles' })
+          }
           activeOpacity={0.8}
         >
-          <Text style={styles.avatarEmoji}>{activeProfile.avatarEmoji || genderBadge}</Text>
-          <Text style={styles.profileText} numberOfLines={1}>
-            {activeProfile.name}
-          </Text>
-          <Feather name="chevron-down" size={12} color={Palette.zinc600} />
+          {hasProfiles ? (
+            <>
+              <Text style={styles.avatarEmoji}>{activeProfile.avatarEmoji || genderBadge}</Text>
+              <Text style={styles.profileText} numberOfLines={1}>
+                {activeProfile.name}
+              </Text>
+              <Feather name="chevron-down" size={12} color={Palette.zinc600} />
+            </>
+          ) : (
+            <>
+              <Feather name="user-plus" size={13} color={Palette.zinc700} />
+              <Text style={styles.profileText} numberOfLines={1}>
+                Add person
+              </Text>
+            </>
+          )}
         </TouchableOpacity>
 
         {/* Bell Notification Icon (Replaced PRO button as requested!) */}
@@ -169,11 +208,11 @@ export const TopBar: React.FC = () => {
             <View style={styles.userProfileHeader}>
               <View style={styles.userInfoLeft}>
                 <View style={styles.userAvatarCircle}>
-                  <Text style={styles.userAvatarInitials}>JD</Text>
+                  <Text style={styles.userAvatarInitials}>{accountInitials}</Text>
                 </View>
-                <View>
-                  <Text style={styles.userNameText}>John Doe</Text>
-                  <Text style={styles.userEmailText}>john.doe@vibely.ai</Text>
+                <View style={{ flexShrink: 1 }}>
+                  <Text style={styles.userNameText} numberOfLines={1}>{accountName}</Text>
+                  <Text style={styles.userEmailText} numberOfLines={1}>{accountEmail}</Text>
                 </View>
               </View>
               <TouchableOpacity
@@ -259,23 +298,6 @@ export const TopBar: React.FC = () => {
                     thumbColor="#ffffff"
                   />
                 </View>
-
-                {/* Toggle 3: Daily Wingman Advice */}
-                <View style={styles.toggleRow}>
-                  <View style={styles.toggleLeft}>
-                    <Feather name="compass" size={15} color={Palette.zinc700} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.toggleTitle}>Daily Wingman Tactics</Text>
-                      <Text style={styles.toggleSub}>Bite-sized social dynamics & frame tips</Text>
-                    </View>
-                  </View>
-                  <Switch
-                    value={prefDailyAdvice}
-                    onValueChange={setPrefDailyAdvice}
-                    trackColor={{ false: Palette.zinc200, true: Palette.indigo600 }}
-                    thumbColor="#ffffff"
-                  />
-                </View>
               </View>
 
               {/* Logout Button */}
@@ -327,6 +349,11 @@ export const TopBar: React.FC = () => {
             )}
 
             <ScrollView style={{ paddingHorizontal: 16, maxHeight: 360 }}>
+              {notifications.length === 0 ? (
+                <Text style={{ fontSize: 13, color: Palette.zinc500, textAlign: 'center', paddingVertical: 28 }}>
+                  No alerts yet. Nudges appear here when a chat goes quiet or a conversation heats up.
+                </Text>
+              ) : null}
               {notifications.map(n => (
                 <TouchableOpacity
                   key={n.id}

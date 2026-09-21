@@ -8,6 +8,7 @@ import { useConvexAuth } from 'convex/react';
 import { useApp } from '../context/AppContext';
 import { SplashScreen } from '../screens/SplashScreen';
 import { AuthScreen } from '../screens/AuthScreen';
+import { OnboardingScreen } from '../screens/OnboardingScreen';
 import { ChatStudioScreen } from '../screens/ChatStudioScreen';
 import { NewSessionFlowScreen } from '../screens/NewSessionFlowScreen';
 import { MainStackScreen } from './MainStackScreen';
@@ -50,10 +51,30 @@ const AuthRouteScreen: React.FC<NativeStackScreenProps<RootStackParamList, 'Auth
   return <AuthScreen />;
 };
 
+const OnboardingRouteScreen: React.FC<NativeStackScreenProps<RootStackParamList, 'Onboarding'>> = ({
+  navigation,
+}) => (
+  <SafeAreaView style={{ flex: 1, backgroundColor: '#ffffff' }} edges={['top', 'left', 'right', 'bottom']}>
+    <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+    <OnboardingScreen onDone={() => navigation.replace('Main')} />
+  </SafeAreaView>
+);
+
 const StudioRouteScreen: React.FC<NativeStackScreenProps<RootStackParamList, 'Studio'>> = ({
   navigation,
 }) => {
-  const { activeProfile, currentConversation, updateMessages } = useApp();
+  const {
+    activeProfile,
+    currentConversation,
+    updateMessages,
+    hasMoreMessages,
+    loadEarlierMessages,
+    generateReplies,
+    chatWithCoach,
+    generateBranches,
+    extractChatText,
+    swapSides,
+  } = useApp();
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#ffffff' }} edges={['top', 'left', 'right', 'bottom']}>
       <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
@@ -61,6 +82,13 @@ const StudioRouteScreen: React.FC<NativeStackScreenProps<RootStackParamList, 'St
         activeProfile={activeProfile}
         messages={currentConversation.messages}
         onUpdateMessages={updateMessages}
+        hasMoreMessages={hasMoreMessages}
+        onLoadEarlier={loadEarlierMessages}
+        onGenerateReplies={generateReplies}
+        onChatWithCoach={chatWithCoach}
+        onGenerateBranches={generateBranches}
+        onExtractChat={extractChatText}
+        onSwapSides={swapSides}
         onBack={() => navigation.goBack()}
       />
     </SafeAreaView>
@@ -70,7 +98,7 @@ const StudioRouteScreen: React.FC<NativeStackScreenProps<RootStackParamList, 'St
 const NewSessionFlowRouteScreen: React.FC<
   NativeStackScreenProps<RootStackParamList, 'NewSessionFlow'>
 > = ({ navigation }) => {
-  const { activeProfile, startNewSession, createCustomSession } = useApp();
+  const { activeProfile, startNewSession, createCustomSession, createScreenshotSession } = useApp();
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#ffffff' }} edges={['top', 'left', 'right', 'bottom']}>
       <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
@@ -80,6 +108,9 @@ const NewSessionFlowRouteScreen: React.FC<
         onStartNewSession={startNewSession}
         onCreateCustomSession={async (rawText, mode, profile) => {
           await createCustomSession(rawText, mode, profile);
+        }}
+        onCreateScreenshotSession={async (images, profile) => {
+          await createScreenshotSession(images, profile);
         }}
         onOpenStudio={() => navigation.replace('Studio')}
       />
@@ -92,6 +123,7 @@ export const RootNavigator: React.FC = () => {
     <Stack.Navigator initialRouteName="Splash" screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Splash" component={SplashRouteScreen} />
       <Stack.Screen name="Auth" component={AuthRouteScreen} />
+      <Stack.Screen name="Onboarding" component={OnboardingRouteScreen} />
       <Stack.Screen name="Main" component={MainStackScreen} />
       <Stack.Screen name="Studio" component={StudioRouteScreen} />
       <Stack.Screen name="NewSessionFlow" component={NewSessionFlowRouteScreen} />
