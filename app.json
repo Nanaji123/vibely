@@ -14,10 +14,8 @@
     "android": {
       "package": "com.nanaji.vibely",
       "adaptiveIcon": {
-        "backgroundColor": "#0b0d17",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundColor": "#ffffff",
+        "foregroundImage": "./assets/android-icon-foreground.png"
       },
       "predictiveBackGestureEnabled": false
     },
